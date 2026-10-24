@@ -133,13 +133,19 @@ void ConversationView::render(cpptui::Buffer& buffer) {
     bool bold = has_line && lines_[line_index].bold;
 
     int col = 0;
+    int last_base_col = -1;
     for (const auto& ch : cpptui::TextHelper::prepare_text_for_render(text)) {
       if (col >= width) break;
       if (ch.display_width == 0) {
-        if (col > 0) {
-          cpptui::Cell previous = buffer.get(x + col - 1, y + row);
-          previous.content += ch.content;
-          buffer.set(x + col - 1, y + row, previous);
+        int target = last_base_col >= 0 ? last_base_col : col;
+        cpptui::Cell previous = buffer.get(x + target, y + row);
+        previous.content += ch.content;
+        previous.fg_color = fg;
+        previous.bg_color = t.panel_bg;
+        buffer.set(x + target, y + row, previous);
+        if (last_base_col < 0) {
+          last_base_col = col;
+          ++col;
         }
         continue;
       }
@@ -155,6 +161,7 @@ void ConversationView::render(cpptui::Buffer& buffer) {
         continuation.bg_color = t.panel_bg;
         buffer.set(x + col + 1, y + row, continuation);
       }
+      last_base_col = col;
       col += ch.display_width;
     }
     for (; col < width; ++col) {
