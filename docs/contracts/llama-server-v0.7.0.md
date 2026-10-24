@@ -74,8 +74,8 @@ Response:
 
 `status.value` is one of `downloading`, `downloaded`, `unloaded`, `loading`,
 `loaded`, `sleeping`. On a failed load the status object also carries
-`"failed": true` and `"exit_code": <int>`. `downloading` carries a
-`progress` map keyed by URL with `{ "done": <bytes>, "total": <bytes> }`.
+`"failed": true` and `"exit_code": <int>`. Download and load progress events are
+delivered over `GET /models/sse`, which is out of scope for M1.
 
 Client notes:
 - Match models by `id`. Tolerate unknown fields and unknown `status.value`.
@@ -101,7 +101,8 @@ Errors:
 - `400 invalid_request_error`: `"model is already running"`.
 
 The load is asynchronous: `success` means the load started. Poll `GET /models`
-until `status.value` becomes `loaded` (or `failed`).
+until `status.value` becomes `loaded`; a failed load leaves `status.value` at
+`unloaded` with `status.failed` true and an `exit_code`.
 
 ## POST /models/unload
 
@@ -220,7 +221,7 @@ If an error occurs mid-stream the server sends one event carrying the standard e
 
 POST endpoints route by the body's `model` field; GET endpoints route by the `model` query parameter (URL-encoded).
 
-A missing or unknown model yields `400 invalid_request_error`.
+For routed chat requests, a missing or unknown model yields `400 invalid_request_error`; `/models/load` returns `404` for an unknown model while `/models/unload` returns `400`.
 
 By default the router autoloads a model on first request; the per-request `autoload=true` query parameter forces it and `autoload=false` disables it.
 
@@ -232,3 +233,4 @@ The Python mock emulates these routes for development and tests.
 - Models load/unload as async state transitions: `unloaded` to `loading` to `loaded`, and `loaded` to `unloaded`, with a failure path reaching `unloaded` plus `failed: true` and `exit_code`.
 - Supports streamed chat with a configurable per-token delay, and both streaming and non-streaming responses.
 - Returns the exact error envelope and HTTP status codes defined above.
+- Provides mock-only, deterministic controls for testing: a reserved model id whose load always fails, a reserved model id that streams with a fixed delay, and an option to force a mid-stream error. These controls are not part of the server contract.
