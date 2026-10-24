@@ -210,7 +210,7 @@ Final chunk:
 
 When `stream_options.include_usage` is true, one extra chunk with an empty `choices` array and a `usage` object is sent after the final chunk.
 
-After the last chunk the stream ends with a sentinel event whose data field is the literal token DONE.
+After the last chunk the stream ends with a sentinel event whose data field is the literal token DONE enclosed in square brackets.
 
 The server may send keep-alive comment events (a line containing only a colon) while the stream is silent.
 
