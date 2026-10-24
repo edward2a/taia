@@ -27,7 +27,7 @@ void App::handle_action(const ui::Action& action) {
 }
 
 int App::run() {
-  cpptui::Theme::set_theme(cpptui::Theme::Dark());
+  cpptui::Theme::set_theme(cpptui::Theme::TokyoNight());
   chat_ = std::make_unique<ui::ChatUi>(
       &tui_, [this](const ui::Action& action) { handle_action(action); });
 

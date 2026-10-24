@@ -141,7 +141,7 @@ void ConversationView::render(cpptui::Buffer& buffer) {
         cpptui::Cell previous = buffer.get(x + target, y + row);
         previous.content += ch.content;
         previous.fg_color = fg;
-        previous.bg_color = t.panel_bg;
+        previous.bg_color = t.background;
         buffer.set(x + target, y + row, previous);
         if (last_base_col < 0) {
           last_base_col = col;
@@ -152,13 +152,13 @@ void ConversationView::render(cpptui::Buffer& buffer) {
       cpptui::Cell cell;
       cell.content = ch.content;
       cell.fg_color = fg;
-      cell.bg_color = t.panel_bg;
+      cell.bg_color = t.background;
       cell.bold = bold;
       buffer.set(x + col, y + row, cell);
       if (ch.display_width == 2 && col + 1 < width) {
         cpptui::Cell continuation;
         continuation.content = "";
-        continuation.bg_color = t.panel_bg;
+        continuation.bg_color = t.background;
         buffer.set(x + col + 1, y + row, continuation);
       }
       last_base_col = col;
@@ -167,7 +167,7 @@ void ConversationView::render(cpptui::Buffer& buffer) {
     for (; col < width; ++col) {
       cpptui::Cell cell;
       cell.content = " ";
-      cell.bg_color = t.panel_bg;
+      cell.bg_color = t.background;
       buffer.set(x + col, y + row, cell);
     }
   }

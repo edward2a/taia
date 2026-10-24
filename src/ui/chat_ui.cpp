@@ -8,36 +8,8 @@ ChatUi::ChatUi(cpptui::App* app, ActionSink sink)
     : app_(app), sink_(std::move(sink)) {
   root_ = std::make_shared<cpptui::Vertical>();
 
-  auto header = std::make_shared<cpptui::Horizontal>();
-  header->fixed_height = 1;
-  auto title = std::make_shared<cpptui::Label>(cpptui::StyledText("taia-ct"));
-  header->add(title);
-  header->add(std::make_shared<cpptui::HorizontalSpacer>(2));
-  auto model_label =
-      std::make_shared<cpptui::Label>(cpptui::StyledText("model:"));
-  header->add(model_label);
-  model_dropdown_ = std::make_shared<cpptui::Dropdown>(app_);
-  model_dropdown_->placeholder = "no model";
-  model_dropdown_->min_width = 32;
-  model_dropdown_->tab_stop = false;
-  model_dropdown_->on_change = [this](int, const std::string& value) {
-    emit(ActionType::SelectModel, value);
-  };
-  header->add(model_dropdown_);
-  header->add(std::make_shared<cpptui::HorizontalSpacer>(1));
-  spinner_ = std::make_shared<cpptui::Spinner>(app_);
-  spinner_->visible = false;
-  header->add(spinner_);
-  header->add(std::make_shared<cpptui::HorizontalSpacer>(1));
-  status_label_ = std::make_shared<cpptui::Label>(cpptui::StyledText("idle"));
-  header->add(status_label_);
-  root_->add(header);
-
-  auto border = std::make_shared<cpptui::Border>(cpptui::BorderStyle::Rounded);
-  border->set_title("Conversation");
   conversation_ = std::make_shared<ConversationView>();
-  border->add(conversation_);
-  root_->add(border);
+  root_->add(conversation_);
 
   error_label_ = std::make_shared<cpptui::Label>(cpptui::StyledText(""));
   error_label_->fixed_height = 1;
@@ -45,14 +17,39 @@ ChatUi::ChatUi(cpptui::App* app, ActionSink sink)
   error_label_->visible = false;
   root_->add(error_label_);
 
-  auto prompt_row = std::make_shared<cpptui::Horizontal>();
-  prompt_row->fixed_height = 1;
-  auto prompt_label = std::make_shared<cpptui::Label>(cpptui::StyledText("> "));
-  prompt_row->add(prompt_label);
+  auto input_box = std::make_shared<cpptui::Border>(cpptui::BorderStyle::Rounded);
+  input_box->fixed_height = 3;
   prompt_input_ = std::make_shared<cpptui::Input>();
-  prompt_input_->placeholder = "Type a message and press Enter";
-  prompt_row->add(prompt_input_);
-  root_->add(prompt_row);
+  prompt_input_->placeholder = "Ask anything...";
+  prompt_input_->bg_color = cpptui::Theme::current().input_bg;
+  input_box->add(prompt_input_);
+  root_->add(input_box);
+
+  auto status_bar = std::make_shared<cpptui::Horizontal>();
+  status_bar->fixed_height = 1;
+  model_dropdown_ = std::make_shared<cpptui::Dropdown>(app_);
+  model_dropdown_->placeholder = "no model";
+  model_dropdown_->min_width = 28;
+  model_dropdown_->tab_stop = false;
+  model_dropdown_->on_change = [this](int, const std::string& value) {
+    emit(ActionType::SelectModel, value);
+  };
+  status_bar->add(model_dropdown_);
+  status_bar->add(std::make_shared<cpptui::HorizontalSpacer>(1));
+  spinner_ = std::make_shared<cpptui::Spinner>(app_);
+  spinner_->visible = false;
+  status_bar->add(spinner_);
+  status_bar->add(std::make_shared<cpptui::HorizontalSpacer>(1));
+  status_label_ = std::make_shared<cpptui::Label>(cpptui::StyledText("idle"));
+  status_bar->add(status_label_);
+  status_bar->add(std::make_shared<cpptui::HorizontalSpacer>(0));
+  std::string hint_text =
+      "enter send   ctrl+l load   ctrl+u unload   ctrl+r refresh   ctrl+c quit";
+  auto hints = std::make_shared<cpptui::Label>(cpptui::StyledText(hint_text));
+  hints->fixed_width = static_cast<int>(hint_text.size());
+  hints->fg_color = cpptui::Theme::current().input_placeholder;
+  status_bar->add(hints);
+  root_->add(status_bar);
 
   app_->register_key(
       13, [this] {
