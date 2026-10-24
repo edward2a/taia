@@ -10,15 +10,12 @@ void App::handle_action(const ui::Action& action) {
       chat_->append_message("system", "(controller not wired yet)");
       break;
     case ui::ActionType::SelectModel:
-      chat_->set_model_status("selected " + action.text);
       break;
     case ui::ActionType::LoadModel:
-      chat_->set_busy(true);
-      chat_->set_model_status("loading " + action.text);
+      chat_->set_state(ui::RunState::Loading);
       break;
     case ui::ActionType::UnloadModel:
-      chat_->set_busy(false);
-      chat_->set_model_status("unloaded " + action.text);
+      chat_->set_state(ui::RunState::Idle);
       break;
     case ui::ActionType::RefreshModels:
       chat_->set_models({"mock/small", "mock/large"}, "");
@@ -32,7 +29,10 @@ int App::run() {
       &tui_, [this](const ui::Action& action) { handle_action(action); });
 
   chat_->set_models({"mock/small", "mock/large"}, "mock/small");
-  chat_->set_model_status("idle");
+  chat_->set_state(ui::RunState::Idle);
+  chat_->set_agent("-");
+  chat_->set_variant("-");
+  chat_->set_context_usage("-");
 
   tui_.register_exit_key('q');
   tui_.register_key('c', [] { cpptui::App::quit(); }, true);

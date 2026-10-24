@@ -111,6 +111,9 @@ void ConversationView::rebuild_lines(int content_width) {
       lines_.push_back({wrapped, t.foreground, false});
     }
   }
+  if (!lines_.empty()) {
+    lines_.insert(lines_.begin(), {"", t.foreground, false});
+  }
 }
 
 int ConversationView::max_scroll() const {
@@ -118,7 +121,10 @@ int ConversationView::max_scroll() const {
 }
 
 void ConversationView::render(cpptui::Buffer& buffer) {
-  rebuild_lines(width);
+  const int pad_left = 2;
+  const int inner_width = std::max(0, width - pad_left - 1);
+
+  rebuild_lines(inner_width);
   if (stick_to_bottom_) scroll_offset_ = max_scroll();
   scroll_offset_ = std::clamp(scroll_offset_, 0, max_scroll());
 
@@ -135,16 +141,17 @@ void ConversationView::render(cpptui::Buffer& buffer) {
     int col = 0;
     int last_base_col = -1;
     for (const auto& ch : cpptui::TextHelper::prepare_text_for_render(text)) {
-      if (col >= width) break;
+      if (col >= inner_width) break;
+      int screen_col = pad_left + col;
       if (ch.display_width == 0) {
-        int target = last_base_col >= 0 ? last_base_col : col;
+        int target = last_base_col >= 0 ? last_base_col : screen_col;
         cpptui::Cell previous = buffer.get(x + target, y + row);
         previous.content += ch.content;
         previous.fg_color = fg;
         previous.bg_color = t.background;
         buffer.set(x + target, y + row, previous);
         if (last_base_col < 0) {
-          last_base_col = col;
+          last_base_col = screen_col;
           ++col;
         }
         continue;
@@ -154,21 +161,21 @@ void ConversationView::render(cpptui::Buffer& buffer) {
       cell.fg_color = fg;
       cell.bg_color = t.background;
       cell.bold = bold;
-      buffer.set(x + col, y + row, cell);
-      if (ch.display_width == 2 && col + 1 < width) {
+      buffer.set(x + screen_col, y + row, cell);
+      if (ch.display_width == 2 && col + 1 < inner_width) {
         cpptui::Cell continuation;
         continuation.content = "";
         continuation.bg_color = t.background;
-        buffer.set(x + col + 1, y + row, continuation);
+        buffer.set(x + screen_col + 1, y + row, continuation);
       }
-      last_base_col = col;
+      last_base_col = screen_col;
       col += ch.display_width;
     }
-    for (; col < width; ++col) {
+    for (; col < inner_width; ++col) {
       cpptui::Cell cell;
       cell.content = " ";
       cell.bg_color = t.background;
-      buffer.set(x + col, y + row, cell);
+      buffer.set(x + pad_left + col, y + row, cell);
     }
   }
 }
