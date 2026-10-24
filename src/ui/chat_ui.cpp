@@ -11,12 +11,10 @@ ChatUi::ChatUi(cpptui::App* app, ActionSink sink)
   auto header = std::make_shared<cpptui::Horizontal>();
   header->fixed_height = 1;
   auto title = std::make_shared<cpptui::Label>(cpptui::StyledText("taia-ct"));
-  title->focusable = false;
   header->add(title);
   header->add(std::make_shared<cpptui::HorizontalSpacer>(2));
   auto model_label =
       std::make_shared<cpptui::Label>(cpptui::StyledText("model:"));
-  model_label->focusable = false;
   header->add(model_label);
   model_dropdown_ = std::make_shared<cpptui::Dropdown>(app_);
   model_dropdown_->placeholder = "no model";
@@ -32,7 +30,6 @@ ChatUi::ChatUi(cpptui::App* app, ActionSink sink)
   header->add(spinner_);
   header->add(std::make_shared<cpptui::HorizontalSpacer>(1));
   status_label_ = std::make_shared<cpptui::Label>(cpptui::StyledText("idle"));
-  status_label_->focusable = false;
   header->add(status_label_);
   root_->add(header);
 
@@ -45,14 +42,12 @@ ChatUi::ChatUi(cpptui::App* app, ActionSink sink)
   error_label_ = std::make_shared<cpptui::Label>(cpptui::StyledText(""));
   error_label_->fixed_height = 1;
   error_label_->fg_color = cpptui::Theme::current().error;
-  error_label_->focusable = false;
   error_label_->visible = false;
   root_->add(error_label_);
 
   auto prompt_row = std::make_shared<cpptui::Horizontal>();
   prompt_row->fixed_height = 1;
   auto prompt_label = std::make_shared<cpptui::Label>(cpptui::StyledText("> "));
-  prompt_label->focusable = false;
   prompt_row->add(prompt_label);
   prompt_input_ = std::make_shared<cpptui::Input>();
   prompt_input_->placeholder = "Type a message and press Enter";
