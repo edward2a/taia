@@ -1,6 +1,7 @@
 #include "ui/conversation_view.hpp"
 
 #include <algorithm>
+#include <sstream>
 
 namespace taia::ui {
 
@@ -14,6 +15,67 @@ cpptui::Color role_color(const std::string& role) {
   if (role == "tool") return t.warning;
   if (role == "error") return t.error;
   return t.foreground;
+}
+
+std::vector<std::string> wrap_columns(const std::string& text, int width) {
+  std::vector<std::string> lines;
+  if (width <= 0) {
+    lines.push_back(text);
+    return lines;
+  }
+
+  std::vector<std::string> paragraphs;
+  std::string paragraph;
+  for (char c : text) {
+    if (c == '\n') {
+      paragraphs.push_back(paragraph);
+      paragraph.clear();
+    } else {
+      paragraph.push_back(c);
+    }
+  }
+  paragraphs.push_back(paragraph);
+
+  for (const auto& para : paragraphs) {
+    std::istringstream words(para);
+    std::string word;
+    std::string line;
+    int line_width = 0;
+    while (words >> word) {
+      int word_width = cpptui::utf8_display_width(word);
+      if (!line.empty() && line_width + 1 + word_width <= width) {
+        line += " " + word;
+        line_width += 1 + word_width;
+        continue;
+      }
+      if (!line.empty()) {
+        lines.push_back(line);
+        line.clear();
+        line_width = 0;
+      }
+      if (word_width <= width) {
+        line = word;
+        line_width = word_width;
+        continue;
+      }
+      std::string part;
+      int part_width = 0;
+      for (const auto& unit :
+           cpptui::TextHelper::prepare_text_for_render(word)) {
+        if (part_width + unit.display_width > width && !part.empty()) {
+          lines.push_back(part);
+          part.clear();
+          part_width = 0;
+        }
+        part += unit.content;
+        part_width += unit.display_width;
+      }
+      line = part;
+      line_width = part_width;
+    }
+    lines.push_back(line);
+  }
+  return lines;
 }
 
 }
@@ -45,8 +107,7 @@ void ConversationView::rebuild_lines(int content_width) {
     if (!lines_.empty()) lines_.push_back({"", t.foreground, false});
     lines_.push_back({role + ":", role_color(role), true});
 
-    for (const auto& wrapped :
-         cpptui::Paragraph::wrap_text_static(text, content_width, 0, 0, false)) {
+    for (const auto& wrapped : wrap_columns(text, content_width)) {
       lines_.push_back({wrapped, t.foreground, false});
     }
   }
@@ -72,14 +133,28 @@ void ConversationView::render(cpptui::Buffer& buffer) {
     bool bold = has_line && lines_[line_index].bold;
 
     int col = 0;
-    for (auto& ch : cpptui::TextHelper::prepare_text_for_render(text)) {
+    for (const auto& ch : cpptui::TextHelper::prepare_text_for_render(text)) {
       if (col >= width) break;
+      if (ch.display_width == 0) {
+        if (col > 0) {
+          cpptui::Cell previous = buffer.get(x + col - 1, y + row);
+          previous.content += ch.content;
+          buffer.set(x + col - 1, y + row, previous);
+        }
+        continue;
+      }
       cpptui::Cell cell;
       cell.content = ch.content;
       cell.fg_color = fg;
       cell.bg_color = t.panel_bg;
       cell.bold = bold;
       buffer.set(x + col, y + row, cell);
+      if (ch.display_width == 2 && col + 1 < width) {
+        cpptui::Cell continuation;
+        continuation.content = "";
+        continuation.bg_color = t.panel_bg;
+        buffer.set(x + col + 1, y + row, continuation);
+      }
       col += ch.display_width;
     }
     for (; col < width; ++col) {

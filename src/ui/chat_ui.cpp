@@ -49,12 +49,30 @@ ChatUi::ChatUi(cpptui::App* app, ActionSink sink)
   prompt_row->add(prompt_input_);
   root_->add(prompt_row);
 
-  app_->register_key(13, [this] { submit_prompt(); });
-  app_->register_key(10, [this] { submit_prompt(); });
   app_->register_key(
-      'l', [this] { emit(ActionType::LoadModel, selected_model()); }, true);
+      13, [this] {
+        if (prompt_input_->has_focus()) submit_prompt();
+      },
+      false, false, false, false);
   app_->register_key(
-      'u', [this] { emit(ActionType::UnloadModel, selected_model()); }, true);
+      10, [this] {
+        if (prompt_input_->has_focus()) submit_prompt();
+      },
+      false, false, false, false);
+  app_->register_key(
+      'l',
+      [this] {
+        std::string model = selected_model();
+        if (!model.empty()) emit(ActionType::LoadModel, model);
+      },
+      true);
+  app_->register_key(
+      'u',
+      [this] {
+        std::string model = selected_model();
+        if (!model.empty()) emit(ActionType::UnloadModel, model);
+      },
+      true);
   app_->register_key('r', [this] { emit(ActionType::RefreshModels); }, true);
 }
 
@@ -85,7 +103,7 @@ void ChatUi::set_models(const std::vector<std::string>& ids,
     if (ids[i] == selected) selected_index = static_cast<int>(i);
   }
   model_dropdown_->set_options(options);
-  if (selected_index >= 0) model_dropdown_->selected_index = selected_index;
+  model_dropdown_->selected_index = selected_index;
   app_->update();
 }
 
