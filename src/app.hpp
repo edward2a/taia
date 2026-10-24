@@ -8,8 +8,6 @@ namespace taia {
 
 class App {
  public:
-  App();
-
   int run();
 
  private:
@@ -19,4 +17,4 @@ class App {
   std::shared_ptr<cpptui::Widget> root_;
 };
 
-}  // namespace taia
+}

@@ -1,7 +1,7 @@
 # Repository notes
 
 - Project goal: build a lightweight C++ LLM agent using cpp-tui, with an experience comparable to OpenCode.
-- Plan lives in `docs/plans/MVP_PLAN.md`. Current target: Milestone 1 (UI-first, then Python mock, then client).
+- Plan lives in `docs/plans/MVP_PLAN.md`. Current target: Milestone 1 — build the cpp-tui UI and Python mock together, with only the client/controller scaffolding needed to connect them.
 - `cpp-tui` is a single-header C++17 library fetched via CMake `FetchContent`, pinned to commit `3ab1f3193c54b50adbaca019a448bfcff8daf159`. No system libraries are required to build the TUI.
 
 ## Build and run
@@ -10,4 +10,4 @@
 - Build: `cmake --build build -j`
 - Run: `./build/taia_ct`
 
-Tests are not set up yet; add the framework and exact test command when the first testable components land (Milestone 1 tasks T4/T5).
+Tests are not set up yet; add the framework and exact test command when the first testable components land.

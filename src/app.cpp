@@ -2,8 +2,6 @@
 
 namespace taia {
 
-App::App() {}
-
 void App::build_ui() {
   cpptui::Theme::set_theme(cpptui::Theme::Dark());
 
@@ -23,4 +21,4 @@ int App::run() {
   return 0;
 }
 
-}  // namespace taia
+}
