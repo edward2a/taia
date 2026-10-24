@@ -21,6 +21,8 @@ FetchContent_MakeAvailable(cpptui)
 add_executable(taia_ct
   src/main.cpp
   src/app.cpp
+  src/ui/chat_ui.cpp
+  src/ui/conversation_view.cpp
 )
 target_include_directories(taia_ct PRIVATE src)
 target_link_libraries(taia_ct PRIVATE cpptui::cpptui)

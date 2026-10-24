@@ -3,6 +3,8 @@
 #include <memory>
 
 #include "cpptui.hpp"
+#include "ui/actions.hpp"
+#include "ui/chat_ui.hpp"
 
 namespace taia {
 
@@ -11,10 +13,10 @@ class App {
   int run();
 
  private:
-  void build_ui();
+  void handle_action(const ui::Action& action);
 
   cpptui::App tui_;
-  std::shared_ptr<cpptui::Widget> root_;
+  std::unique_ptr<ui::ChatUi> chat_;
 };
 
 }
