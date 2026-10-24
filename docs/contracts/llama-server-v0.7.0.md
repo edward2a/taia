@@ -219,7 +219,7 @@ If an error occurs mid-stream the server sends one event carrying the standard e
 
 ## Routing and autoload
 
-POST endpoints route by the body's `model` field; GET endpoints route by the `model` query parameter (URL-encoded).
+Routed model endpoints are dispatched by model name: POST requests use the body's `model` field, and GET requests use the `model` query parameter (URL-encoded). Management routes such as `GET /models` are not model-routed.
 
 For routed chat requests, a missing or unknown model yields `400 invalid_request_error`; `/models/load` returns `404` for an unknown model while `/models/unload` returns `400`.
 
