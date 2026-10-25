@@ -91,6 +91,15 @@ void ConversationView::add_message(const std::string& role,
   stick_to_bottom_ = true;
 }
 
+void ConversationView::append_to_last(const std::string& text) {
+  if (messages_.empty()) {
+    messages_.emplace_back("assistant", text);
+  } else {
+    messages_.back().second += text;
+  }
+  stick_to_bottom_ = true;
+}
+
 void ConversationView::clear() {
   messages_.clear();
   lines_.clear();

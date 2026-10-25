@@ -12,6 +12,7 @@ class ConversationView : public cpptui::Widget {
   ConversationView();
 
   void add_message(const std::string& role, const std::string& text);
+  void append_to_last(const std::string& text);
   void clear();
 
   void render(cpptui::Buffer& buffer) override;

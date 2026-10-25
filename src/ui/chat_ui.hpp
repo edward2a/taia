@@ -20,9 +20,11 @@ class ChatUi {
   std::shared_ptr<cpptui::Widget> root() const { return root_; }
 
   void append_message(const std::string& role, const std::string& text);
+  void append_to_last(const std::string& text);
   void set_models(const std::vector<std::string>& ids,
                   const std::string& selected);
   void set_state(RunState state);
+  RunState state() const { return state_; }
   void set_agent(const std::string& agent);
   void set_variant(const std::string& variant);
   void set_context_usage(const std::string& usage);
@@ -39,6 +41,7 @@ class ChatUi {
 
   cpptui::App* app_;
   ActionSink sink_;
+  RunState state_ = RunState::Idle;
 
   std::shared_ptr<cpptui::Vertical> root_;
   std::shared_ptr<ConversationView> conversation_;

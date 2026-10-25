@@ -8,9 +8,10 @@
 
 - Configure: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug`
 - Build: `cmake --build build -j`
-- Run: `./build/taia_ct`
+- Run: `./build/taia_ct http://127.0.0.1:9931` (or set `TAIA_SERVER_URL`).
+- C++ tests: `ctest --test-dir build --output-on-failure`
 
-Python tests use the stdlib `unittest`; the C++ side has no test framework yet.
+Python tests use the stdlib `unittest`.
 
 ## Python mock
 

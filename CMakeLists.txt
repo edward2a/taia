@@ -18,12 +18,33 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(cpptui)
 
+FetchContent_Declare(
+  nlohmann_json
+  GIT_REPOSITORY https://github.com/nlohmann/json.git
+  GIT_TAG        55f93686c01528224f448c19128836e7df245f72
+)
+FetchContent_MakeAvailable(nlohmann_json)
+
 add_executable(taia_ct
   src/main.cpp
   src/app.cpp
+  src/client/llama_client.cpp
+  src/controller/session_controller.cpp
+  src/net/http_client.cpp
   src/ui/chat_ui.cpp
   src/ui/conversation_view.cpp
   src/ui/prompt_input.cpp
 )
 target_include_directories(taia_ct PRIVATE src)
-target_link_libraries(taia_ct PRIVATE cpptui::cpptui)
+target_link_libraries(taia_ct PRIVATE cpptui::cpptui nlohmann_json::nlohmann_json)
+
+enable_testing()
+
+add_executable(taia_client_test
+  tests/cpp/test_client.cpp
+  src/net/http_client.cpp
+  src/client/llama_client.cpp
+)
+target_include_directories(taia_client_test PRIVATE src)
+target_link_libraries(taia_client_test PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME taia_client_test COMMAND taia_client_test)

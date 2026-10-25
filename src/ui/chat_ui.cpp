@@ -157,6 +157,11 @@ void ChatUi::append_message(const std::string& role, const std::string& text) {
   app_->update();
 }
 
+void ChatUi::append_to_last(const std::string& text) {
+  conversation_->append_to_last(text);
+  app_->update();
+}
+
 void ChatUi::set_models(const std::vector<std::string>& ids,
                         const std::string& selected) {
   std::vector<cpptui::StyledText> options;
@@ -193,6 +198,7 @@ void ChatUi::set_state(RunState state) {
       color = t.error;
       break;
   }
+  state_ = state;
   state_label_->set_text(cpptui::StyledText(std::string("\u25CF ") + label));
   state_label_->fg_color = color;
   app_->update();
