@@ -10,4 +10,10 @@
 - Build: `cmake --build build -j`
 - Run: `./build/taia_ct`
 
-Tests are not set up yet; add the framework and exact test command when the first testable components land.
+Python tests use the stdlib `unittest`; the C++ side has no test framework yet.
+
+## Python mock
+
+- Run: `python3 mock/server.py --port 9931`
+- Test: `python3 -m unittest discover -s tests -v`
+- Lint: `python3 -m black mock tests` and `python3 -m flake8 mock tests` (config in `setup.cfg`)
