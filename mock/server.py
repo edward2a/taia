@@ -89,6 +89,10 @@ class MockState:
         with self.lock:
             return [m.to_json() for m in self.models.values()]
 
+    def any_loading(self):
+        with self.lock:
+            return any(m.status == "loading" for m in self.models.values())
+
     def load(self, name):
         with self.lock:
             model = self.models.get(name)
@@ -175,7 +179,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?", 1)[0]
         if path in ("/health", "/v1/health"):
-            self._send_json(200, {"status": "ok"})
+            if self.state.any_loading():
+                self._send_json(503, error_body("Loading model", "unavailable_error"))
+            else:
+                self._send_json(200, {"status": "ok"})
         elif path in ("/models", "/v1/models"):
             self._send_json(200, {"object": "list", "data": self.state.list_models()})
         else:

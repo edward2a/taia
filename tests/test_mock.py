@@ -81,6 +81,16 @@ class MockServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body, {"status": "ok"})
 
+    def test_health_while_loading(self):
+        self.state.load_delay = 0.3
+        self.request("POST", "/models/load", {"model": "mock/small"})
+        status, body = self.request("GET", "/health")
+        self.assertEqual(status, 503)
+        self.assertEqual(body["error"]["type"], "unavailable_error")
+        self.wait_status("mock/small", {"loaded"})
+        status, body = self.request("GET", "/health")
+        self.assertEqual(status, 200)
+
     def test_list_models(self):
         status, body = self.request("GET", "/models")
         self.assertEqual(status, 200)
