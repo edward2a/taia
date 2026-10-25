@@ -139,6 +139,21 @@ def token_delay_for(state, model):
     return state.token_delay
 
 
+VALID_ROLES = {"system", "user", "assistant", "tool", "developer"}
+
+
+def validate_messages(messages):
+    for message in messages:
+        if not isinstance(message, dict):
+            return "messages must contain objects"
+        if message.get("role") not in VALID_ROLES:
+            return "message role is invalid"
+        content = message.get("content")
+        if content is not None and not isinstance(content, str):
+            return "message content must be a string"
+    return None
+
+
 def generate_reply(model, messages):
     prompt = ""
     for message in messages:
@@ -189,29 +204,35 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(404, error_body("not found", "not_found_error"))
 
     def do_POST(self):
+        try:
+            body = self._read_json()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._send_json(400, error_body("invalid JSON body"))
+            return
+        if not isinstance(body, dict):
+            self._send_json(400, error_body("request body must be a JSON object"))
+            return
         path = self.path.split("?", 1)[0]
         if path == "/models/load":
-            self._handle_load()
+            self._handle_load(body)
         elif path == "/models/unload":
-            self._handle_unload()
+            self._handle_unload(body)
         elif path == "/v1/chat/completions":
-            self._handle_chat()
+            self._handle_chat(body)
         else:
             self._send_json(404, error_body("not found", "not_found_error"))
 
-    def _handle_load(self):
-        body = self._read_json()
+    def _handle_load(self, body):
         name = body.get("model", "")
-        if not name:
+        if not isinstance(name, str) or not name:
             self._send_json(400, error_body("model name is missing from the request"))
             return
         ok, payload = self.state.load(name)
         self._send_json(200 if ok else payload["error"]["code"], payload)
 
-    def _handle_unload(self):
-        body = self._read_json()
+    def _handle_unload(self, body):
         name = body.get("model", "")
-        if not name:
+        if not isinstance(name, str) or not name:
             self._send_json(400, error_body("model name is missing from the request"))
             return
         ok, payload = self.state.unload(name)
@@ -245,18 +266,28 @@ class Handler(BaseHTTPRequestHandler):
             },
         }
 
-    def _handle_chat(self):
-        body = self._read_json()
+    def _handle_chat(self, body):
         model = body.get("model", "")
-        if not model:
+        if not isinstance(model, str) or not model:
             self._send_json(400, error_body("model name is missing from the request"))
             return
         if self.state.get(model) is None:
             self._send_json(400, error_body("model '{}' not found".format(model)))
             return
         messages = body.get("messages", [])
+        if not isinstance(messages, list):
+            self._send_json(400, error_body("messages must be an array"))
+            return
+        options = body.get("stream_options", {})
+        if not isinstance(options, dict):
+            self._send_json(400, error_body("stream_options must be an object"))
+            return
+        error = validate_messages(messages)
+        if error:
+            self._send_json(400, error_body(error))
+            return
         reply = generate_reply(model, messages)
-        include_usage = bool(body.get("stream_options", {}).get("include_usage", False))
+        include_usage = bool(options.get("include_usage", False))
         if body.get("stream", False):
             self._stream_chat(model, reply, include_usage)
         else:

@@ -43,6 +43,20 @@ class MockServerTest(unittest.TestCase):
             with exc:
                 return exc.code, json.loads(exc.read().decode("utf-8"))
 
+    def post_raw(self, path, raw):
+        req = urllib.request.Request(
+            self.base + path,
+            data=raw,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            with exc:
+                return exc.code, json.loads(exc.read().decode("utf-8"))
+
     def stream(self, body):
         data = json.dumps(body).encode("utf-8")
         req = urllib.request.Request(
@@ -75,6 +89,15 @@ class MockServerTest(unittest.TestCase):
                 return status
             time.sleep(0.01)
         self.fail("model {} did not reach {}".format(name, desired))
+
+    def wait_failed(self, name, timeout=2.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            status = self.model_status(name)
+            if status.get("failed"):
+                return status
+            time.sleep(0.01)
+        self.fail("model {} did not report failure".format(name))
 
     def test_health(self):
         status, body = self.request("GET", "/health")
@@ -122,8 +145,8 @@ class MockServerTest(unittest.TestCase):
     def test_load_failure(self):
         status, body = self.request("POST", "/models/load", {"model": FAIL_LOAD_MODEL})
         self.assertEqual(status, 200)
-        result = self.wait_status(FAIL_LOAD_MODEL, {"unloaded"})
-        self.assertTrue(result.get("failed"))
+        result = self.wait_failed(FAIL_LOAD_MODEL)
+        self.assertEqual(result["value"], "unloaded")
         self.assertEqual(result["exit_code"], 1)
 
     def test_unload_not_running(self):
@@ -210,6 +233,80 @@ class MockServerTest(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertEqual(body["error"]["type"], "invalid_request_error")
+
+    def test_invalid_json_body(self):
+        status, body = self.post_raw("/v1/chat/completions", b"{not json")
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"]["type"], "invalid_request_error")
+
+    def test_non_object_body(self):
+        status, body = self.post_raw("/models/load", b"[]")
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"]["type"], "invalid_request_error")
+
+    def test_bad_model_type(self):
+        status, body = self.request(
+            "POST", "/v1/chat/completions", {"model": [], "messages": []}
+        )
+        self.assertEqual(status, 400)
+
+    def test_bad_messages_type(self):
+        status, body = self.request(
+            "POST", "/v1/chat/completions", {"model": "mock/small", "messages": "hi"}
+        )
+        self.assertEqual(status, 400)
+
+    def test_bad_stream_options_type(self):
+        status, body = self.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": "mock/small",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream_options": "nope",
+            },
+        )
+        self.assertEqual(status, 400)
+
+    def test_null_messages(self):
+        status, body = self.request(
+            "POST", "/v1/chat/completions", {"model": "mock/small", "messages": None}
+        )
+        self.assertEqual(status, 400)
+
+    def test_falsey_stream_options_list(self):
+        status, body = self.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": "mock/small",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream_options": [],
+            },
+        )
+        self.assertEqual(status, 400)
+
+    def test_non_object_message(self):
+        status, body = self.request(
+            "POST", "/v1/chat/completions", {"model": "mock/small", "messages": ["hi"]}
+        )
+        self.assertEqual(status, 400)
+
+    def test_invalid_role(self):
+        status, body = self.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": "mock/small", "messages": [{"role": "robot", "content": "hi"}]},
+        )
+        self.assertEqual(status, 400)
+
+    def test_non_string_content(self):
+        status, body = self.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": "mock/small", "messages": [{"role": "user", "content": 5}]},
+        )
+        self.assertEqual(status, 400)
 
 
 if __name__ == "__main__":
