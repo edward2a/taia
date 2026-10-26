@@ -33,6 +33,7 @@ add_executable(taia_ct
   src/client/llama_client.cpp
   src/controller/session_controller.cpp
   src/net/http_client.cpp
+  src/tools/tools.cpp
   src/ui/chat_ui.cpp
   src/ui/conversation_view.cpp
   src/ui/prompt_input.cpp
@@ -48,8 +49,18 @@ add_executable(taia_client_test
   src/net/http_client.cpp
   src/client/llama_client.cpp
   src/controller/session_controller.cpp
+  src/tools/tools.cpp
 )
 target_include_directories(taia_client_test PRIVATE src)
 target_link_libraries(taia_client_test PRIVATE nlohmann_json::nlohmann_json
                       Threads::Threads)
 add_test(NAME taia_client_test COMMAND taia_client_test)
+
+add_executable(taia_tools_test
+  tests/cpp/test_tools.cpp
+  src/tools/tools.cpp
+)
+target_include_directories(taia_tools_test PRIVATE src)
+target_link_libraries(taia_tools_test PRIVATE nlohmann_json::nlohmann_json
+                      Threads::Threads)
+add_test(NAME taia_tools_test COMMAND taia_tools_test)
