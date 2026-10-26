@@ -82,9 +82,18 @@ std::string lower(std::string text) {
   return text;
 }
 
+std::size_t utf8_boundary(const std::string& text, std::size_t limit) {
+  std::size_t cut = limit;
+  while (cut > 0 &&
+         (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) {
+    --cut;
+  }
+  return cut;
+}
+
 std::string truncate_line(const std::string& line) {
   if (line.size() <= kMaxLineChars) return line;
-  return line.substr(0, kMaxLineChars) + "...";
+  return line.substr(0, utf8_boundary(line, kMaxLineChars)) + "...";
 }
 
 bool get_string(const json& args, const char* key, bool required,
@@ -437,7 +446,8 @@ ToolResult ToolRegistry::execute(const std::string& name,
   try {
     ToolResult result = tool->execute(arguments, context);
     if (result.content.size() > context.max_output_bytes) {
-      result.content.resize(context.max_output_bytes);
+      result.content.resize(
+          utf8_boundary(result.content, context.max_output_bytes));
       result.content += "\n[output truncated]";
     }
     return result;

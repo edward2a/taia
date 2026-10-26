@@ -67,7 +67,8 @@ class SessionController {
   void do_load_model(const std::string& model);
   void do_unload_model(const std::string& model);
   void do_submit_prompt(const std::string& model, const std::string& text);
-  void trim_history();
+  std::size_t trim_history();
+  void drop_last_turn();
 
   client::LlamaClient client_;
   tools::ToolRegistry tools_;
