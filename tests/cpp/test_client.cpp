@@ -13,15 +13,21 @@
 #include <unistd.h>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "client/llama_client.hpp"
 #include "controller/session_controller.hpp"
 
 namespace {
 
+using nlohmann::json;
 using taia::ControllerEvent;
 using taia::SessionController;
+using taia::client::ChatMessage;
+using taia::client::ChatResult;
 using taia::client::LlamaClient;
 using taia::client::ModelInfo;
+using taia::client::ToolDefinition;
 
 int failures = 0;
 
@@ -176,6 +182,14 @@ std::string chunked_response(const std::string& content_type,
 
 std::string sse(const std::string& payload) {
   return "data: " + payload + "\n\n";
+}
+
+std::string sse_chunk(const json& delta, const json& finish_reason) {
+  json event;
+  event["choices"] = json::array();
+  event["choices"].push_back(
+      {{"finish_reason", finish_reason}, {"index", 0}, {"delta", delta}});
+  return sse(event.dump());
 }
 
 std::string partial_chunked_sse(const std::string& payload) {
@@ -468,6 +482,108 @@ void test_role_event_keeps_start_timeout() {
         "role-only timeout message: " + error);
 }
 
+void test_stream_tool_call() {
+  const json role_delta = {{"role", "assistant"}, {"content", nullptr}};
+  json first_call;
+  first_call["index"] = 0;
+  first_call["id"] = "call_1";
+  first_call["type"] = "function";
+  first_call["function"]["name"] = "read_file";
+  first_call["function"]["arguments"] = "{\"pa";
+  const json first = {{"tool_calls", json::array({first_call})}};
+
+  json second_call;
+  second_call["index"] = 0;
+  second_call["function"]["arguments"] = "th\":\"README.md\"}";
+  const json second = {{"tool_calls", json::array({second_call})}};
+
+  const std::string body = sse_chunk(role_delta, nullptr) +
+                           sse_chunk(first, nullptr) +
+                           sse_chunk(second, nullptr) +
+                           sse_chunk(json::object(), "tool_calls") +
+                           sse(std::string("[") + "DONE" + "]");
+  FakeServer server(chunked_response("text/event-stream", body));
+  LlamaClient llama(server.base_url());
+  std::vector<ToolDefinition> tools{
+      {"read_file", "Read a file.", "{\"type\":\"object\"}"}};
+  std::vector<ChatMessage> messages{{"user", "read README.md"}};
+  ChatResult result;
+  std::string error;
+  check(llama.chat_turn("mock/small", messages, tools, nullptr, result, error),
+        "tool turn succeeds: " + error);
+  check(result.tool_calls.size() == 1, "one tool call parsed");
+  if (result.tool_calls.size() == 1) {
+    check(result.tool_calls[0].id == "call_1", "tool call id");
+    check(result.tool_calls[0].name == "read_file", "tool call name");
+    check(result.tool_calls[0].arguments == "{\"path\":\"README.md\"}",
+          "tool arguments reassembled: " + result.tool_calls[0].arguments);
+  }
+  check(result.finish_reason == "tool_calls", "tool finish reason");
+  check(server.request_headers().find("\"tools\"") != std::string::npos,
+        "request includes tools");
+  check(server.request_headers().find("read_file") != std::string::npos,
+        "request includes tool name");
+}
+
+void test_tool_history_serialization() {
+  const std::string body =
+      sse_chunk({{"role", "assistant"}, {"content", nullptr}}, nullptr) +
+      sse_chunk({{"content", "file contents"}}, nullptr) +
+      sse_chunk(json::object(), "stop") +
+      sse(std::string("[") + "DONE" + "]");
+  FakeServer server(chunked_response("text/event-stream", body));
+  LlamaClient llama(server.base_url());
+  std::vector<ToolDefinition> tools{
+      {"read_file", "Read a file.", "{\"type\":\"object\"}"}};
+  std::vector<ChatMessage> messages;
+  messages.push_back({"user", "read README.md"});
+  ChatMessage assistant;
+  assistant.role = "assistant";
+  assistant.tool_calls.push_back(
+      {"call_1", "read_file", "{\"path\":\"README.md\"}"});
+  messages.push_back(assistant);
+  ChatMessage tool;
+  tool.role = "tool";
+  tool.content = "file contents";
+  tool.tool_call_id = "call_1";
+  messages.push_back(tool);
+  ChatResult result;
+  std::string error;
+  check(llama.chat_turn("mock/small", messages, tools, nullptr, result, error),
+        "tool history turn succeeds: " + error);
+  check(result.content == "file contents",
+        "content accumulated: " + result.content);
+  const std::string& request = server.request_headers();
+  check(request.find("tool_call_id") != std::string::npos,
+        "request includes tool_call_id");
+  check(request.find("read_file") != std::string::npos,
+        "request includes tool call");
+  check(request.find("\\\"path\\\":\\\"README.md\\\"") != std::string::npos,
+        "request includes tool arguments");
+}
+
+void test_invalid_tool_arguments() {
+  json bad_call;
+  bad_call["index"] = 0;
+  bad_call["id"] = "call_1";
+  bad_call["function"]["name"] = "read_file";
+  bad_call["function"]["arguments"] = "not-json";
+  const json call = {{"tool_calls", json::array({bad_call})}};
+  const std::string body =
+      sse_chunk({{"role", "assistant"}}, nullptr) + sse_chunk(call, nullptr) +
+      sse_chunk(json::object(), "tool_calls") +
+      sse(std::string("[") + "DONE" + "]");
+  FakeServer server(chunked_response("text/event-stream", body));
+  LlamaClient llama(server.base_url());
+  std::vector<ChatMessage> messages{{"user", "x"}};
+  ChatResult result;
+  std::string error;
+  check(!llama.chat_turn("mock/small", messages, {}, nullptr, result, error),
+        "invalid tool arguments fail");
+  check(error.find("invalid arguments") != std::string::npos,
+        "invalid tool arguments message: " + error);
+}
+
 void test_controller_unload_polling() {
   const std::string loaded =
       "{\"object\":\"list\",\"data\":[{\"id\":\"m\","
@@ -545,6 +661,9 @@ int main() {
   test_start_timeout_configurable();
   test_idle_timeout_configurable();
   test_role_event_keeps_start_timeout();
+  test_stream_tool_call();
+  test_tool_history_serialization();
+  test_invalid_tool_arguments();
   test_controller_unload_polling();
   test_controller_shutdown_stall();
   if (failures == 0) {

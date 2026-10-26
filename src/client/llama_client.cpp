@@ -134,18 +134,51 @@ bool LlamaClient::unload_model(const std::string& model, std::string& error,
   return success_response(response.body, "unload", error);
 }
 
-bool LlamaClient::chat_stream(
+bool LlamaClient::chat_turn(
     const std::string& model, const std::vector<ChatMessage>& messages,
-    const std::function<void(const std::string&)>& on_delta, std::string& error,
-    const std::atomic<bool>* cancel) {
+    const std::vector<ToolDefinition>& tools,
+    const std::function<void(const std::string&)>& on_delta, ChatResult& result,
+    std::string& error, const std::atomic<bool>* cancel) {
+  result = ChatResult{};
   json request;
   request["model"] = model;
   request["stream"] = true;
   request["stream_options"] = json{{"include_usage", true}};
   request["messages"] = json::array();
   for (const ChatMessage& message : messages) {
-    request["messages"].push_back(
-        json{{"role", message.role}, {"content", message.content}});
+    json item{{"role", message.role}, {"content", message.content}};
+    if (!message.tool_calls.empty()) {
+      item["tool_calls"] = json::array();
+      for (const ToolCall& call : message.tool_calls) {
+        item["tool_calls"].push_back(
+            json{{"id", call.id},
+                 {"type", "function"},
+                 {"function",
+                  {{"name", call.name}, {"arguments", call.arguments}}}});
+      }
+    }
+    if (!message.tool_call_id.empty()) {
+      item["tool_call_id"] = message.tool_call_id;
+    }
+    request["messages"].push_back(std::move(item));
+  }
+  if (!tools.empty()) {
+    request["tools"] = json::array();
+    for (const ToolDefinition& tool : tools) {
+      json parameters;
+      try {
+        parameters = json::parse(tool.parameters);
+      } catch (const std::exception& exc) {
+        error = "invalid schema for tool " + tool.name + ": " + exc.what();
+        return false;
+      }
+      request["tools"].push_back(
+          json{{"type", "function"},
+               {"function",
+                {{"name", tool.name},
+                 {"description", tool.description},
+                 {"parameters", std::move(parameters)}}}});
+    }
   }
 
   std::string done_marker;
@@ -155,6 +188,7 @@ bool LlamaClient::chat_stream(
   bool saw_done = false;
   bool failed = false;
   bool saw_content = false;
+  std::vector<ToolCall> tool_calls;
   const bool transport_ok = http_.stream(
       "POST", "/v1/chat/completions", request.dump(),
       [&](const net::SseEvent& event) -> bool {
@@ -175,14 +209,54 @@ bool LlamaClient::chat_stream(
           }
           const json& choice = parsed["choices"][0];
           if (!choice.is_object()) return true;
-          if (choice.contains("delta") && choice["delta"].is_object()) {
-            const json& delta = choice["delta"];
-            if (delta.contains("content") && delta["content"].is_string()) {
-              const std::string text = delta["content"].get<std::string>();
-              if (!text.empty()) {
-                saw_content = true;
-                if (on_delta) on_delta(text);
-              }
+          if (choice.contains("finish_reason") &&
+              choice["finish_reason"].is_string()) {
+            result.finish_reason = choice["finish_reason"].get<std::string>();
+          }
+          if (!choice.contains("delta") || !choice["delta"].is_object()) {
+            return true;
+          }
+          const json& delta = choice["delta"];
+          if (delta.contains("content") && delta["content"].is_string()) {
+            const std::string text = delta["content"].get<std::string>();
+            if (!text.empty()) {
+              saw_content = true;
+              result.content += text;
+              if (on_delta) on_delta(text);
+            }
+          }
+          if (!delta.contains("tool_calls") || !delta["tool_calls"].is_array()) {
+            return true;
+          }
+          for (const json& raw : delta["tool_calls"]) {
+            if (!raw.is_object()) continue;
+            int index = 0;
+            if (raw.contains("index") && raw["index"].is_number_integer()) {
+              index = raw["index"].get<int>();
+            }
+            constexpr int kMaxToolCalls = 16;
+            if (index < 0 || index >= kMaxToolCalls) {
+              error = "invalid tool call index";
+              failed = true;
+              return false;
+            }
+            if (static_cast<std::size_t>(index) >= tool_calls.size()) {
+              tool_calls.resize(static_cast<std::size_t>(index) + 1);
+            }
+            ToolCall& call = tool_calls[static_cast<std::size_t>(index)];
+            if (raw.contains("id") && raw["id"].is_string()) {
+              call.id = raw["id"].get<std::string>();
+            }
+            if (!raw.contains("function") || !raw["function"].is_object()) {
+              continue;
+            }
+            const json& function = raw["function"];
+            if (function.contains("name") && function["name"].is_string()) {
+              call.name = function["name"].get<std::string>();
+            }
+            if (function.contains("arguments") &&
+                function["arguments"].is_string()) {
+              call.arguments += function["arguments"].get<std::string>();
             }
           }
         } catch (const std::exception& exc) {
@@ -199,7 +273,31 @@ bool LlamaClient::chat_stream(
     error = "stream ended without done sentinel";
     return false;
   }
+  for (std::size_t i = 0; i < tool_calls.size(); ++i) {
+    ToolCall& call = tool_calls[i];
+    if (call.name.empty()) {
+      error = "tool call is missing a name";
+      return false;
+    }
+    if (call.id.empty()) {
+      call.id = "call_" + std::to_string(i);
+    }
+    if (call.arguments.empty()) call.arguments = "{}";
+    if (!json::accept(call.arguments)) {
+      error = "invalid arguments for tool " + call.name;
+      return false;
+    }
+    result.tool_calls.push_back(std::move(call));
+  }
   return true;
+}
+
+bool LlamaClient::chat_stream(
+    const std::string& model, const std::vector<ChatMessage>& messages,
+    const std::function<void(const std::string&)>& on_delta, std::string& error,
+    const std::atomic<bool>* cancel) {
+  ChatResult result;
+  return chat_turn(model, messages, {}, on_delta, result, error, cancel);
 }
 
 }
