@@ -235,11 +235,13 @@ def select_tool_call(messages, tools):
     lowered = content.lower()
     if "list_files" in names and "list" in lowered:
         return make_tool_call("list_files", {"path": "."})
-    if "search" in names and "search" in lowered:
-        query = content.split("search", 1)[1].strip() or "TODO"
+    search_index = lowered.find("search")
+    if "search" in names and search_index >= 0:
+        query = content[search_index + len("search") :].strip() or "TODO"
         return make_tool_call("search", {"query": query})
-    if "read_file" in names and "read" in lowered:
-        path = content.split("read", 1)[1].strip() or "README.md"
+    read_index = lowered.find("read")
+    if "read_file" in names and read_index >= 0:
+        path = content[read_index + len("read") :].strip() or "README.md"
         return make_tool_call("read_file", {"path": path})
     return None
 

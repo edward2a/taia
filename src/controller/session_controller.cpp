@@ -1,9 +1,26 @@
 #include "controller/session_controller.hpp"
 
 #include <chrono>
+#include <exception>
 #include <utility>
 
 namespace taia {
+
+namespace {
+
+constexpr std::size_t kMaxHistoryBytes = 512 * 1024;
+constexpr std::size_t kMaxToolOutputPerTurn = 256 * 1024;
+
+std::size_t message_bytes(const client::ChatMessage& message) {
+  std::size_t total = message.role.size() + message.content.size() +
+                      message.tool_call_id.size() + 32;
+  for (const client::ToolCall& call : message.tool_calls) {
+    total += call.id.size() + call.name.size() + call.arguments.size() + 16;
+  }
+  return total;
+}
+
+}
 
 SessionController::SessionController(std::string base_url, std::string api_key,
                                      net::StreamTimeouts timeouts,
@@ -68,7 +85,14 @@ void SessionController::worker_loop() {
       task = std::move(tasks_.front());
       tasks_.pop_front();
     }
-    task();
+    try {
+      task();
+    } catch (const std::exception& exc) {
+      push_event({ControllerEvent::Type::Error, {},
+                  std::string("internal error: ") + exc.what(), false});
+    } catch (...) {
+      push_event({ControllerEvent::Type::Error, {}, "internal error", false});
+    }
   }
 }
 
@@ -218,6 +242,25 @@ void SessionController::do_unload_model(const std::string& model) {
   }
 }
 
+void SessionController::trim_history() {
+  std::size_t total = system_prompt_.size();
+  for (const client::ChatMessage& message : history_) {
+    total += message_bytes(message);
+  }
+  while (total > kMaxHistoryBytes && history_.size() > 1) {
+    std::size_t next_user = 1;
+    while (next_user < history_.size() &&
+           history_[next_user].role != "user") {
+      ++next_user;
+    }
+    if (next_user >= history_.size()) break;
+    for (std::size_t i = 0; i < next_user; ++i) {
+      total -= message_bytes(history_[i]);
+    }
+    history_.erase(history_.begin(), history_.begin() + next_user);
+  }
+}
+
 void SessionController::do_submit_prompt(const std::string& model,
                                          const std::string& text) {
   if (model.empty()) {
@@ -229,12 +272,14 @@ void SessionController::do_submit_prompt(const std::string& model,
   const auto definitions = tools_.definitions();
   constexpr int kMaxRounds = 8;
   constexpr std::size_t kMaxToolCalls = 8;
+  std::size_t tool_output_bytes = 0;
   for (int round = 0; round < kMaxRounds; ++round) {
     if (stopping_) return;
     if (cancel_) {
       push_event({ControllerEvent::Type::StreamDone, {}, "", true});
       return;
     }
+    trim_history();
     std::vector<client::ChatMessage> request;
     request.reserve(history_.size() + 1);
     request.push_back({"system", system_prompt_});
@@ -266,14 +311,19 @@ void SessionController::do_submit_prompt(const std::string& model,
                   "too many tool calls in one round", false});
       return;
     }
+    const std::size_t history_before_assistant = history_.size();
     client::ChatMessage assistant;
     assistant.role = "assistant";
     assistant.content = result.content;
     assistant.tool_calls = result.tool_calls;
     history_.push_back(std::move(assistant));
     for (const client::ToolCall& call : result.tool_calls) {
-      if (stopping_) return;
+      if (stopping_) {
+        history_.resize(history_before_assistant);
+        return;
+      }
       if (cancel_) {
+        history_.resize(history_before_assistant);
         push_event({ControllerEvent::Type::StreamDone, {}, "", true});
         return;
       }
@@ -284,6 +334,15 @@ void SessionController::do_submit_prompt(const std::string& model,
           tools_.execute(call.name, call.arguments, context);
       std::string output = tool_result.content;
       if (!tool_result.ok) output = "error: " + output;
+      const std::size_t remaining =
+          tool_output_bytes < kMaxToolOutputPerTurn
+              ? kMaxToolOutputPerTurn - tool_output_bytes
+              : 0;
+      if (output.size() > remaining) {
+        output.resize(remaining);
+        output += "\n[truncated]";
+      }
+      tool_output_bytes += output.size();
       push_event(
           {ControllerEvent::Type::ToolFinished, {}, output, tool_result.ok});
       client::ChatMessage tool;

@@ -164,6 +164,19 @@ void test_agents_md() {
       taia::tools::load_agents_md(workspace.path(), 5);
   check(truncated.find("[AGENTS.md truncated]") != std::string::npos,
         "AGENTS.md truncates");
+
+  const fs::path outside =
+      workspace.path().parent_path() /
+      (workspace.path().filename().string() + "_outside_agents");
+  std::error_code ec;
+  fs::remove_all(outside, ec);
+  fs::create_directories(outside, ec);
+  std::ofstream(outside / "AGENTS.md") << "outside rules\n";
+  fs::remove(workspace.path() / "AGENTS.md", ec);
+  fs::create_symlink(outside / "AGENTS.md", workspace.path() / "AGENTS.md", ec);
+  check(taia::tools::load_agents_md(workspace.path()).empty(),
+        "AGENTS.md symlink escape rejected");
+  fs::remove_all(outside, ec);
 }
 
 void test_output_cap() {

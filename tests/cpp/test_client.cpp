@@ -588,6 +588,55 @@ void test_invalid_tool_arguments() {
         "invalid tool arguments message: " + error);
 }
 
+void test_tool_arguments_limit() {
+  json tool_call;
+  tool_call["index"] = 0;
+  tool_call["id"] = "call_1";
+  tool_call["function"]["name"] = "read_file";
+  tool_call["function"]["arguments"] = std::string(70000, 'x');
+  const json tool_delta = {{"tool_calls", json::array({tool_call})}};
+  const std::string body =
+      sse_chunk({{"role", "assistant"}}, nullptr) +
+      sse_chunk(tool_delta, nullptr) +
+      sse_chunk(json::object(), "tool_calls") +
+      sse(std::string("[") + "DONE" + "]");
+  FakeServer server(chunked_response("text/event-stream", body));
+  LlamaClient llama(server.base_url());
+  std::vector<ChatMessage> messages{{"user", "x"}};
+  ChatResult result;
+  std::string error;
+  check(!llama.chat_turn("mock/small", messages, {}, nullptr, result, error),
+        "oversized tool arguments fail");
+  check(error.find("too large") != std::string::npos,
+        "argument limit message: " + error);
+}
+
+void test_invalid_utf8_tool_content() {
+  const std::string body =
+      sse_chunk({{"role", "assistant"}, {"content", nullptr}}, nullptr) +
+      sse_chunk({{"content", "ok"}}, nullptr) +
+      sse_chunk(json::object(), "stop") +
+      sse(std::string("[") + "DONE" + "]");
+  FakeServer server(chunked_response("text/event-stream", body));
+  LlamaClient llama(server.base_url());
+  std::vector<ChatMessage> messages;
+  messages.push_back({"user", "x"});
+  ChatMessage assistant;
+  assistant.role = "assistant";
+  assistant.tool_calls.push_back({"call_1", "read_file", "{}"});
+  messages.push_back(assistant);
+  ChatMessage tool;
+  tool.role = "tool";
+  tool.content = std::string("\xFF", 1);
+  tool.tool_call_id = "call_1";
+  messages.push_back(tool);
+  ChatResult result;
+  std::string error;
+  check(llama.chat_turn("mock/small", messages, {}, nullptr, result, error),
+        "invalid UTF-8 tool content is replaced: " + error);
+  check(result.content == "ok", "turn completes with invalid UTF-8 history");
+}
+
 void test_controller_unload_polling() {
   const std::string loaded =
       "{\"object\":\"list\",\"data\":[{\"id\":\"m\","
@@ -753,6 +802,8 @@ int main() {
   test_stream_tool_call();
   test_tool_history_serialization();
   test_invalid_tool_arguments();
+  test_tool_arguments_limit();
+  test_invalid_utf8_tool_content();
   test_controller_unload_polling();
   test_controller_tool_loop();
   test_controller_shutdown_stall();

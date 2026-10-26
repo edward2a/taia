@@ -272,7 +272,7 @@ class MockServerTest(unittest.TestCase):
             "/v1/chat/completions",
             {
                 "model": "mock/small",
-                "messages": [{"role": "user", "content": "read README.md"}],
+                "messages": [{"role": "user", "content": "READ README.md"}],
                 "tools": [tool_definition("read_file")],
             },
         )

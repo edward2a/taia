@@ -1,5 +1,6 @@
 #include "client/llama_client.hpp"
 
+#include <cstddef>
 #include <exception>
 #include <utility>
 
@@ -10,6 +11,9 @@ namespace taia::client {
 namespace {
 
 using json = nlohmann::json;
+
+constexpr std::size_t kMaxToolArgumentBytes = 64 * 1024;
+constexpr std::size_t kMaxToolArgumentTotal = 256 * 1024;
 
 std::string error_message_from_json(const json& value) {
   if (value.is_string()) return value.get<std::string>();
@@ -188,9 +192,11 @@ bool LlamaClient::chat_turn(
   bool saw_done = false;
   bool failed = false;
   bool saw_output = false;
+  std::size_t argument_bytes = 0;
   std::vector<ToolCall> tool_calls;
   const bool transport_ok = http_.stream(
-      "POST", "/v1/chat/completions", request.dump(),
+      "POST", "/v1/chat/completions",
+      request.dump(-1, ' ', false, json::error_handler_t::replace),
       [&](const net::SseEvent& event) -> bool {
         if (event.data == done_marker) {
           saw_done = true;
@@ -258,7 +264,18 @@ bool LlamaClient::chat_turn(
             }
             if (function.contains("arguments") &&
                 function["arguments"].is_string()) {
-              call.arguments += function["arguments"].get<std::string>();
+              const std::string fragment =
+                  function["arguments"].get<std::string>();
+              if (fragment.size() > kMaxToolArgumentBytes ||
+                  call.arguments.size() + fragment.size() >
+                      kMaxToolArgumentBytes ||
+                  argument_bytes + fragment.size() > kMaxToolArgumentTotal) {
+                error = "tool call arguments are too large";
+                failed = true;
+                return false;
+              }
+              call.arguments += fragment;
+              argument_bytes += fragment.size();
               progressed = true;
             }
             if (progressed) saw_output = true;

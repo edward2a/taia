@@ -28,6 +28,17 @@ bool cancelled(const ToolContext& context) {
   return context.cancel != nullptr && context.cancel->load();
 }
 
+bool within_root(const fs::path& root, const fs::path& candidate) {
+  auto root_it = root.begin();
+  auto candidate_it = candidate.begin();
+  for (; root_it != root.end(); ++root_it, ++candidate_it) {
+    if (candidate_it == candidate.end() || *candidate_it != *root_it) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool resolve_path(const ToolContext& context, const std::string& requested,
                   fs::path& out, std::string& error) {
   if (requested.empty()) {
@@ -50,13 +61,9 @@ bool resolve_path(const ToolContext& context, const std::string& requested,
     error = "cannot resolve path: " + ec.message();
     return false;
   }
-  auto root_it = root.begin();
-  auto candidate_it = candidate.begin();
-  for (; root_it != root.end(); ++root_it, ++candidate_it) {
-    if (candidate_it == candidate.end() || *candidate_it != *root_it) {
-      error = "path escapes workspace";
-      return false;
-    }
+  if (!within_root(root, candidate)) {
+    error = "path escapes workspace";
+    return false;
   }
   out = candidate;
   return true;
@@ -448,7 +455,13 @@ ToolRegistry make_builtin_tools() {
 }
 
 std::string load_agents_md(const fs::path& workspace, std::size_t max_bytes) {
-  std::ifstream input(workspace / "AGENTS.md", std::ios::binary);
+  std::error_code ec;
+  const fs::path root = fs::weakly_canonical(workspace, ec);
+  if (ec) return {};
+  const fs::path target = fs::weakly_canonical(root / "AGENTS.md", ec);
+  if (ec || !within_root(root, target)) return {};
+  if (!fs::is_regular_file(target, ec)) return {};
+  std::ifstream input(target, std::ios::binary);
   if (!input) return {};
   std::string data(max_bytes + 1, '\0');
   input.read(data.data(), static_cast<std::streamsize>(data.size()));
