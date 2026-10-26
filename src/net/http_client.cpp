@@ -132,9 +132,10 @@ bool resolve_address(const std::string& host, const std::string& port,
     return false;
   }
   std::shared_ptr<ResolveState> state;
+  std::thread worker;
   try {
     state = std::make_shared<ResolveState>();
-    std::thread worker([state, host, port] {
+    worker = std::thread([state, host, port] {
       addrinfo hints{};
       hints.ai_family = AF_UNSPEC;
       hints.ai_socktype = SOCK_STREAM;
@@ -151,10 +152,20 @@ bool resolve_address(const std::string& host, const std::string& port,
       state->cv.notify_all();
       g_resolver_threads.fetch_sub(1);
     });
-    worker.detach();
   } catch (const std::exception& exc) {
     g_resolver_threads.fetch_sub(1);
     error = std::string("cannot start resolver: ") + exc.what();
+    return false;
+  }
+  try {
+    worker.detach();
+  } catch (const std::exception& exc) {
+    worker.join();
+    if (state->info != nullptr) {
+      ::freeaddrinfo(state->info);
+      state->info = nullptr;
+    }
+    error = std::string("cannot detach resolver: ") + exc.what();
     return false;
   }
 
