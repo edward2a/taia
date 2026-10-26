@@ -155,6 +155,10 @@ def validate_messages(messages):
 
 
 def generate_reply(model, messages):
+    if messages and messages[-1].get("role") == "tool":
+        content = messages[-1].get("content")
+        text = content if isinstance(content, str) else ""
+        return "tool result: " + text[:200]
     prompt = ""
     for message in messages:
         if message.get("role") == "user":
@@ -163,6 +167,81 @@ def generate_reply(model, messages):
                 prompt = content
     body = "echo: " + prompt if prompt else "echo:"
     return "{} ({}).".format(body, model)
+
+
+def validate_tools(tools):
+    if tools is None:
+        return None
+    if not isinstance(tools, list):
+        return "tools must be an array"
+    for tool in tools:
+        if not isinstance(tool, dict):
+            return "tools must contain objects"
+        if tool.get("type") != "function":
+            return "tool type must be function"
+        function = tool.get("function")
+        if not isinstance(function, dict):
+            return "tool function must be an object"
+        name = function.get("name")
+        if not isinstance(name, str) or not name:
+            return "tool function name is required"
+        if not isinstance(function.get("parameters"), dict):
+            return "tool function parameters must be an object"
+    return None
+
+
+def tool_names(tools):
+    names = set()
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        if isinstance(function, dict):
+            name = function.get("name")
+            if isinstance(name, str):
+                names.add(name)
+    return names
+
+
+def make_tool_call(name, arguments):
+    return {
+        "id": "call_" + uuid.uuid4().hex[:16],
+        "name": name,
+        "arguments": arguments,
+    }
+
+
+def tool_call_payload(call):
+    return {
+        "id": call["id"],
+        "type": "function",
+        "function": {
+            "name": call["name"],
+            "arguments": json.dumps(call["arguments"]),
+        },
+    }
+
+
+def select_tool_call(messages, tools):
+    names = tool_names(tools or [])
+    if not names or not messages:
+        return None
+    last = messages[-1]
+    if not isinstance(last, dict) or last.get("role") != "user":
+        return None
+    content = last.get("content")
+    if not isinstance(content, str):
+        return None
+    lowered = content.lower()
+    if "list_files" in names and "list" in lowered:
+        return make_tool_call("list_files", {"path": "."})
+    if "search" in names and "search" in lowered:
+        query = content.split("search", 1)[1].strip() or "TODO"
+        return make_tool_call("search", {"query": query})
+    if "read_file" in names and "read" in lowered:
+        path = content.split("read", 1)[1].strip() or "README.md"
+        return make_tool_call("read_file", {"path": path})
+    return None
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -241,10 +320,19 @@ class Handler(BaseHTTPRequestHandler):
     def _completion_id(self):
         return "chatcmpl-" + uuid.uuid4().hex
 
-    def _chat_response(self, model, reply):
+    def _chat_response(self, model, reply, tool_call=None):
         created = int(time.time())
         prompt_tokens = 7
         completion_tokens = len(reply.split(" "))
+        message = {"role": "assistant", "content": reply}
+        finish_reason = "stop"
+        if tool_call is not None:
+            message = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [tool_call_payload(tool_call)],
+            }
+            finish_reason = "tool_calls"
         return {
             "id": self._completion_id(),
             "object": "chat.completion",
@@ -254,8 +342,8 @@ class Handler(BaseHTTPRequestHandler):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": reply},
-                    "finish_reason": "stop",
+                    "message": message,
+                    "finish_reason": finish_reason,
                 }
             ],
             "usage": {
@@ -286,12 +374,18 @@ class Handler(BaseHTTPRequestHandler):
         if error:
             self._send_json(400, error_body(error))
             return
+        tools = body.get("tools", [])
+        error = validate_tools(tools)
+        if error:
+            self._send_json(400, error_body(error))
+            return
         reply = generate_reply(model, messages)
+        tool_call = select_tool_call(messages, tools)
         include_usage = bool(options.get("include_usage", False))
         if body.get("stream", False):
-            self._stream_chat(model, reply, include_usage)
+            self._stream_chat(model, reply, include_usage, tool_call)
         else:
-            self._send_json(200, self._chat_response(model, reply))
+            self._send_json(200, self._chat_response(model, reply, tool_call))
 
     def _write_event(self, obj):
         self.wfile.write(("data: " + json.dumps(obj) + "\n\n").encode("utf-8"))
@@ -307,7 +401,7 @@ class Handler(BaseHTTPRequestHandler):
             "object": "chat.completion.chunk",
         }
 
-    def _stream_chat(self, model, reply, include_usage):
+    def _stream_chat(self, model, reply, include_usage, tool_call=None):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -317,12 +411,58 @@ class Handler(BaseHTTPRequestHandler):
 
         cid = self._completion_id()
         created = int(time.time())
-        words = reply.split(" ")
-        delay = token_delay_for(self.state, model)
-
         self._write_event(
             self._chunk(model, cid, created, {"role": "assistant", "content": None})
         )
+        if tool_call is not None:
+            payload = tool_call_payload(tool_call)
+            arguments = payload["function"]["arguments"]
+            midpoint = len(arguments) // 2
+            self._write_event(
+                self._chunk(
+                    model,
+                    cid,
+                    created,
+                    {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": payload["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": payload["function"]["name"],
+                                    "arguments": arguments[:midpoint],
+                                },
+                            }
+                        ]
+                    },
+                )
+            )
+            if midpoint < len(arguments):
+                self._write_event(
+                    self._chunk(
+                        model,
+                        cid,
+                        created,
+                        {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "function": {"arguments": arguments[midpoint:]},
+                                }
+                            ]
+                        },
+                    )
+                )
+            self._write_event(self._chunk(model, cid, created, {}, "tool_calls"))
+            if include_usage:
+                self._write_event(self._usage_chunk(model, cid, created, 12))
+            self.wfile.write((DONE_EVENT + chr(10) * 2).encode("utf-8"))
+            self.wfile.flush()
+            return
+
+        words = reply.split(" ")
+        delay = token_delay_for(self.state, model)
         sent = 0
         for index, word in enumerate(words):
             piece = word if index == len(words) - 1 else word + " "

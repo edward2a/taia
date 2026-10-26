@@ -217,6 +217,59 @@ The server may send keep-alive comment events (a line containing only a colon) w
 
 If an error occurs mid-stream the server sends one event carrying the standard error envelope, then closes without a DONE token.
 
+## Tool calls (Milestone 3)
+
+Tool support uses the OpenAI-compatible function-calling shape. The server must
+run with a tool-aware chat template (`--jinja` and a compatible template).
+
+The request adds a `tools` array:
+
+```json
+"tools": [
+  {
+    "type": "function",
+    "function": {
+      "name": "read_file",
+      "description": "Read a file from the workspace.",
+      "parameters": {
+        "type": "object",
+        "properties": { "path": { "type": "string" } },
+        "required": ["path"]
+      }
+    }
+  }
+]
+```
+
+Streaming tool call deltas may be fragmented across events:
+
+```json
+{"choices":[{"finish_reason":null,"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"read_file","arguments":"{\"pa"}}]}}]}
+{"choices":[{"finish_reason":null,"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"th\":\"README.md\"}"}}]}}]}
+{"choices":[{"finish_reason":"tool_calls","index":0,"delta":{}}]}
+```
+
+- Accumulate `function.arguments` per `index`; the concatenation must be valid JSON.
+- `id` and `type` may only appear on the first delta for a call.
+- The stream still ends with the DONE sentinel.
+- `finish_reason` may be `tool_calls` (newer servers) or `tool`; treat both as
+  tool calls.
+
+The assistant message sent back in history:
+
+```json
+{"role":"assistant","content":null,"tool_calls":[{"id":"call_abc","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}
+```
+
+Tool result message:
+
+```json
+{"role":"tool","tool_call_id":"call_abc","content":"1: # Hi"}
+```
+
+The client executes tools locally and sends one tool message per call before
+requesting the next completion.
+
 ## Routing and autoload
 
 Routed model endpoints are dispatched by model name: POST requests use the body's `model` field, and GET requests use the `model` query parameter (URL-encoded). Management routes such as `GET /models` are not model-routed.
@@ -234,3 +287,17 @@ The Python mock emulates these routes for development and tests.
 - Supports streamed chat with a configurable per-token delay, and both streaming and non-streaming responses.
 - Returns the exact error envelope and HTTP status codes defined above.
 - Provides mock-only, deterministic controls for testing: a reserved model id whose load always fails, a reserved model id that streams with a fixed delay, and an option to force a mid-stream error. These controls are not part of the server contract.
+
+### Mock tool calls (Milestone 3)
+
+- `POST /v1/chat/completions` accepts the `tools` array above and returns
+  deterministic tool calls.
+- A user prompt containing `list` calls `list_files` with `{"path":"."}`.
+- A user prompt containing `search` calls `search` with the remaining text as
+  `query`.
+- A user prompt containing `read` calls `read_file` with the remaining text as
+  `path`.
+- When the last message is a tool result, the mock streams
+  `tool result: <content>` and finishes with `stop`.
+- Streamed tool calls split `function.arguments` across two deltas to exercise
+  client reassembly.

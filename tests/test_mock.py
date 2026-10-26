@@ -13,6 +13,17 @@ from mock.server import (
 )
 
 
+def tool_definition(name):
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": "Test tool.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+
 class MockServerTest(unittest.TestCase):
     def setUp(self):
         self.state = MockState(token_delay=0.0, load_delay=0.02)
@@ -224,6 +235,96 @@ class MockServerTest(unittest.TestCase):
         )
         self.assertFalse(any("DONE" in event for event in events))
         self.assertTrue(any("error" in json.loads(event) for event in events))
+
+    def test_chat_tool_call_stream(self):
+        events = self.stream(
+            {
+                "model": "mock/small",
+                "stream": True,
+                "messages": [{"role": "user", "content": "list files"}],
+                "tools": [tool_definition("list_files")],
+            }
+        )
+        done = chr(91) + "DONE" + chr(93)
+        self.assertEqual(events[-1], done)
+        chunks = [json.loads(event) for event in events[:-1]]
+        name = None
+        call_id = None
+        arguments = ""
+        finish = None
+        for chunk in chunks:
+            choice = chunk["choices"][0]
+            if choice["finish_reason"]:
+                finish = choice["finish_reason"]
+            for call in choice["delta"].get("tool_calls", []):
+                call_id = call.get("id", call_id)
+                function = call.get("function", {})
+                name = function.get("name", name)
+                arguments += function.get("arguments", "")
+        self.assertTrue(call_id)
+        self.assertEqual(name, "list_files")
+        self.assertEqual(json.loads(arguments), {"path": "."})
+        self.assertEqual(finish, "tool_calls")
+
+    def test_chat_tool_call_non_stream(self):
+        status, body = self.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": "mock/small",
+                "messages": [{"role": "user", "content": "read README.md"}],
+                "tools": [tool_definition("read_file")],
+            },
+        )
+        self.assertEqual(status, 200)
+        choice = body["choices"][0]
+        self.assertEqual(choice["finish_reason"], "tool_calls")
+        self.assertIsNone(choice["message"]["content"])
+        call = choice["message"]["tool_calls"][0]
+        self.assertEqual(call["type"], "function")
+        self.assertEqual(call["function"]["name"], "read_file")
+        self.assertEqual(
+            json.loads(call["function"]["arguments"]), {"path": "README.md"}
+        )
+
+    def test_chat_tool_result_followup(self):
+        events = self.stream(
+            {
+                "model": "mock/small",
+                "stream": True,
+                "messages": [
+                    {"role": "user", "content": "read README.md"},
+                    {"role": "tool", "tool_call_id": "call_1", "content": "# Hi"},
+                ],
+                "tools": [tool_definition("read_file")],
+            }
+        )
+        done = chr(91) + "DONE" + chr(93)
+        self.assertEqual(events[-1], done)
+        chunks = [json.loads(event) for event in events[:-1]]
+        text = ""
+        finish = None
+        for chunk in chunks:
+            choice = chunk["choices"][0]
+            if choice["finish_reason"]:
+                finish = choice["finish_reason"]
+            else:
+                text += choice["delta"].get("content") or ""
+        self.assertIn("tool result: # Hi", text)
+        self.assertEqual(finish, "stop")
+
+    def test_bad_tools_type(self):
+        status, body = self.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": "mock/small",
+                "messages": [{"role": "user", "content": "hi"}],
+                "tools": "nope",
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(body["error"]["type"], "invalid_request_error")
 
     def test_chat_unknown_model(self):
         status, body = self.request(
