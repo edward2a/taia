@@ -55,8 +55,10 @@ SessionController::SessionController(std::string base_url, std::string api_key,
   }
   system_prompt_ =
       "You are a coding agent working in " + workspace_.string() +
-      ". Use the provided read-only tools to inspect the workspace. "
-      "Use workspace-relative paths and do not claim to modify files.";
+      ". Use the available tools to inspect and modify the workspace. "
+      "Mutating tools require user approval; never claim an operation "
+      "succeeded unless the tool result says so. Use workspace-relative "
+      "paths.";
   const std::string agents = tools::load_agents_md(workspace_);
   if (!agents.empty()) {
     system_prompt_ += "\n\nAGENTS.md:\n";
