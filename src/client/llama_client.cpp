@@ -187,7 +187,7 @@ bool LlamaClient::chat_turn(
   done_marker += static_cast<char>(93);
   bool saw_done = false;
   bool failed = false;
-  bool saw_content = false;
+  bool saw_output = false;
   std::vector<ToolCall> tool_calls;
   const bool transport_ok = http_.stream(
       "POST", "/v1/chat/completions", request.dump(),
@@ -220,7 +220,7 @@ bool LlamaClient::chat_turn(
           if (delta.contains("content") && delta["content"].is_string()) {
             const std::string text = delta["content"].get<std::string>();
             if (!text.empty()) {
-              saw_content = true;
+              saw_output = true;
               result.content += text;
               if (on_delta) on_delta(text);
             }
@@ -251,13 +251,17 @@ bool LlamaClient::chat_turn(
               continue;
             }
             const json& function = raw["function"];
+            bool progressed = false;
             if (function.contains("name") && function["name"].is_string()) {
               call.name = function["name"].get<std::string>();
+              progressed = true;
             }
             if (function.contains("arguments") &&
                 function["arguments"].is_string()) {
               call.arguments += function["arguments"].get<std::string>();
+              progressed = true;
             }
+            if (progressed) saw_output = true;
           }
         } catch (const std::exception& exc) {
           error = std::string("invalid stream event: ") + exc.what();
@@ -266,7 +270,7 @@ bool LlamaClient::chat_turn(
         }
         return true;
       },
-      [&] { return saw_content; }, error, cancel);
+      [&] { return saw_output; }, error, cancel);
   if (!transport_ok) return false;
   if (failed) return false;
   if (!saw_done) {
