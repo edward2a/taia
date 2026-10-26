@@ -5,8 +5,8 @@
 
 namespace taia {
 
-SessionController::SessionController(std::string base_url)
-    : client_(std::move(base_url)) {}
+SessionController::SessionController(std::string base_url, std::string api_key)
+    : client_(std::move(base_url), std::move(api_key)) {}
 
 SessionController::~SessionController() { stop(); }
 
@@ -44,7 +44,7 @@ void SessionController::worker_loop() {
     {
       std::unique_lock<std::mutex> lock(task_mutex_);
       task_cv_.wait(lock, [this] { return stopping_ || !tasks_.empty(); });
-      if (stopping_ && tasks_.empty()) break;
+      if (stopping_) break;
       task = std::move(tasks_.front());
       tasks_.pop_front();
     }
@@ -158,7 +158,34 @@ void SessionController::do_unload_model(const std::string& model) {
     push_event({ControllerEvent::Type::Error, {}, error, false});
     return;
   }
-  push_event({ControllerEvent::Type::UnloadFinished, {}, model, true});
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (!stopping_ && std::chrono::steady_clock::now() < deadline) {
+    std::vector<client::ModelInfo> models;
+    std::string list_error;
+    if (!client_.list_models(models, list_error)) {
+      push_event({ControllerEvent::Type::Error, {}, list_error, false});
+      return;
+    }
+    bool found = false;
+    for (const client::ModelInfo& info : models) {
+      if (info.id != model) continue;
+      found = true;
+      if (info.status == "unloaded") {
+        push_event({ControllerEvent::Type::UnloadFinished, {}, model, true});
+        return;
+      }
+    }
+    if (!found) {
+      push_event({ControllerEvent::Type::UnloadFinished, {}, model, true});
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  if (!stopping_) {
+    push_event(
+        {ControllerEvent::Type::Error, {}, "timed out unloading " + model, false});
+  }
 }
 
 void SessionController::do_submit_prompt(const std::string& model,
@@ -167,6 +194,7 @@ void SessionController::do_submit_prompt(const std::string& model,
     push_event({ControllerEvent::Type::Error, {}, "no model selected", false});
     return;
   }
+  if (stopping_) return;
   cancel_ = false;
   history_.push_back({"user", text});
   std::string reply;

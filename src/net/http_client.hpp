@@ -20,7 +20,7 @@ struct SseEvent {
 
 class HttpClient {
  public:
-  explicit HttpClient(std::string base_url);
+  explicit HttpClient(std::string base_url, std::string api_key = {});
 
   const std::string& base_url() const { return base_url_; }
 
@@ -35,6 +35,7 @@ class HttpClient {
 
  private:
   std::string base_url_;
+  std::string api_key_;
 };
 
 }

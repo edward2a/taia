@@ -32,10 +32,26 @@ std::string error_message(const std::string& body) {
   return body;
 }
 
+bool success_response(const std::string& body, const std::string& action,
+                      std::string& error) {
+  try {
+    const json parsed = json::parse(body);
+    if (parsed.is_object() && parsed.contains("success") &&
+        parsed["success"].is_boolean() && parsed["success"].get<bool>()) {
+      return true;
+    }
+  } catch (const std::exception& exc) {
+    error = "invalid " + action + " response: " + exc.what();
+    return false;
+  }
+  error = "unexpected " + action + " response";
+  return false;
+}
+
 }  // namespace
 
-LlamaClient::LlamaClient(std::string base_url)
-    : http_(std::move(base_url)) {}
+LlamaClient::LlamaClient(std::string base_url, std::string api_key)
+    : http_(std::move(base_url), std::move(api_key)) {}
 
 bool LlamaClient::list_models(std::vector<ModelInfo>& models,
                               std::string& error) {
@@ -96,7 +112,7 @@ bool LlamaClient::load_model(const std::string& model, std::string& error) {
     error = error_message(response.body);
     return false;
   }
-  return true;
+  return success_response(response.body, "load", error);
 }
 
 bool LlamaClient::unload_model(const std::string& model, std::string& error) {
@@ -111,7 +127,7 @@ bool LlamaClient::unload_model(const std::string& model, std::string& error) {
     error = error_message(response.body);
     return false;
   }
-  return true;
+  return success_response(response.body, "unload", error);
 }
 
 bool LlamaClient::chat_stream(
@@ -133,7 +149,6 @@ bool LlamaClient::chat_stream(
   done_marker += "DONE";
   done_marker += static_cast<char>(93);
   bool saw_done = false;
-  bool saw_finish = false;
   bool failed = false;
   const bool transport_ok = http_.stream(
       "POST", "/v1/chat/completions", request.dump(),
@@ -162,10 +177,6 @@ bool LlamaClient::chat_stream(
               if (!text.empty() && on_delta) on_delta(text);
             }
           }
-          if (choice.contains("finish_reason") &&
-              !choice["finish_reason"].is_null()) {
-            saw_finish = true;
-          }
         } catch (const std::exception& exc) {
           error = std::string("invalid stream event: ") + exc.what();
           failed = true;
@@ -176,8 +187,8 @@ bool LlamaClient::chat_stream(
       error, cancel);
   if (!transport_ok) return false;
   if (failed) return false;
-  if (!saw_done && !saw_finish) {
-    error = "stream ended unexpectedly";
+  if (!saw_done) {
+    error = "stream ended without done sentinel";
     return false;
   }
   return true;

@@ -12,7 +12,7 @@ namespace taia {
 
 class App {
  public:
-  int run(std::string base_url);
+  int run(std::string base_url, std::string api_key = {});
 
  private:
   void handle_action(const ui::Action& action);

@@ -23,7 +23,7 @@ struct ChatMessage {
 
 class LlamaClient {
  public:
-  explicit LlamaClient(std::string base_url);
+  explicit LlamaClient(std::string base_url, std::string api_key = {});
 
   bool list_models(std::vector<ModelInfo>& models, std::string& error);
   bool load_model(const std::string& model, std::string& error);

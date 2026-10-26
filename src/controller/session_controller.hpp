@@ -31,7 +31,7 @@ struct ControllerEvent {
 
 class SessionController {
  public:
-  explicit SessionController(std::string base_url);
+  explicit SessionController(std::string base_url, std::string api_key = {});
   ~SessionController();
 
   SessionController(const SessionController&) = delete;

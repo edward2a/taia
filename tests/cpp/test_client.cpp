@@ -46,9 +46,15 @@ class FakeServer {
   }
 
   ~FakeServer() {
-    if (thread_.joinable()) thread_.join();
+    wait();
     if (fd_ >= 0) ::close(fd_);
   }
+
+  void wait() {
+    if (thread_.joinable()) thread_.join();
+  }
+
+  const std::string& request_headers() const { return request_; }
 
   std::string base_url() const {
     return "http://127.0.0.1:" + std::to_string(port_);
@@ -58,7 +64,7 @@ class FakeServer {
   void serve() {
     const int client = ::accept(fd_, nullptr, nullptr);
     if (client < 0) return;
-    read_request(client);
+    read_request(client, request_);
     std::size_t sent = 0;
     while (sent < response_.size()) {
       const ssize_t n = ::send(client, response_.data() + sent,
@@ -73,8 +79,7 @@ class FakeServer {
     ::close(client);
   }
 
-  static void read_request(int client) {
-    std::string data;
+  static void read_request(int client, std::string& data) {
     char buffer[4096];
     std::size_t header_end = std::string::npos;
     long long content_length = 0;
@@ -104,6 +109,7 @@ class FakeServer {
   int fd_ = -1;
   int port_ = 0;
   std::string response_;
+  std::string request_;
   std::thread thread_;
 };
 
@@ -237,7 +243,7 @@ void test_stream_incomplete() {
   const bool ok = llama.chat_stream(
       "mock/small", {{"user", "hi"}}, [](const std::string&) {}, error);
   check(!ok, "incomplete stream fails");
-  check(error == "stream ended unexpectedly",
+  check(error.find("done sentinel") != std::string::npos,
         "incomplete stream message: " + error);
 }
 
@@ -260,6 +266,70 @@ void test_bad_scheme() {
         "scheme error message: " + error);
 }
 
+void test_truncated_content_length() {
+  const std::string raw =
+      "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+      "Content-Length: 100\r\nConnection: close\r\n\r\n{\"object\":\"list\"}";
+  FakeServer server(raw);
+  LlamaClient llama(server.base_url());
+  std::vector<ModelInfo> models;
+  std::string error;
+  check(!llama.list_models(models, error), "truncated body fails");
+  check(error.find("truncated") != std::string::npos,
+        "truncated body message: " + error);
+}
+
+void test_truncated_chunked() {
+  const std::string raw =
+      "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+      "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+      "10\r\n{\"object\"";
+  FakeServer server(raw);
+  LlamaClient llama(server.base_url());
+  std::vector<ModelInfo> models;
+  std::string error;
+  check(!llama.list_models(models, error), "truncated chunk fails");
+  check(error.find("truncated") != std::string::npos,
+        "truncated chunk message: " + error);
+}
+
+void test_stream_without_done() {
+  std::string body;
+  body += sse(
+      "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,"
+      "\"delta\":{}}]}");
+  FakeServer server(chunked_response("text/event-stream", body));
+  LlamaClient llama(server.base_url());
+  std::string error;
+  const bool ok = llama.chat_stream(
+      "mock/small", {{"user", "hi"}}, [](const std::string&) {}, error);
+  check(!ok, "stream without done fails");
+  check(error.find("done sentinel") != std::string::npos,
+        "stream without done message: " + error);
+}
+
+void test_api_key() {
+  FakeServer server(http_response(200, "application/json",
+                                  "{\"object\":\"list\",\"data\":[]}"));
+  LlamaClient llama(server.base_url(), "secret");
+  std::vector<ModelInfo> models;
+  std::string error;
+  check(llama.list_models(models, error), "api key request succeeds: " + error);
+  server.wait();
+  check(server.request_headers().find("Authorization: Bearer secret") !=
+            std::string::npos,
+        "authorization header present");
+}
+
+void test_load_unexpected_body() {
+  FakeServer server(http_response(200, "application/json", "{}"));
+  LlamaClient llama(server.base_url());
+  std::string error;
+  check(!llama.load_model("mock/small", error), "load rejects missing success");
+  check(error.find("unexpected load response") != std::string::npos,
+        "unexpected load message: " + error);
+}
+
 int main() {
   test_list_models();
   test_chunked_list_models();
@@ -269,6 +339,11 @@ int main() {
   test_stream_incomplete();
   test_invalid_models_json();
   test_bad_scheme();
+  test_truncated_content_length();
+  test_truncated_chunked();
+  test_stream_without_done();
+  test_api_key();
+  test_load_unexpected_body();
   if (failures == 0) {
     std::cout << "all client tests passed\n";
     return 0;

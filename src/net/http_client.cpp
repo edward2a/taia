@@ -298,8 +298,8 @@ Connection::Pump Connection::pump_plain(std::string& error) {
     }
     if (raw_.empty() && !fill_raw(error)) {
       if (!error.empty()) return Pump::Error;
-      body_done_ = true;
-      return Pump::End;
+      error = "truncated response body";
+      return Pump::Error;
     }
     const std::size_t want = static_cast<std::size_t>(
         std::min<long long>(static_cast<long long>(raw_.size()),
@@ -325,12 +325,12 @@ Connection::Pump Connection::pump_chunked(std::string& error) {
     if (chunk_remaining_ == 0) {
       std::string line;
       bool eof = false;
-      if (chunk_need_terminator_) {
-        if (!read_raw_line(line, eof, error)) {
-          if (!error.empty()) return Pump::Error;
-          body_done_ = true;
-          return Pump::End;
-        }
+        if (chunk_need_terminator_) {
+          if (!read_raw_line(line, eof, error)) {
+            if (!error.empty()) return Pump::Error;
+            error = "truncated chunked body";
+            return Pump::Error;
+          }
         chunk_need_terminator_ = false;
         if (!line.empty()) {
           error = "malformed chunked encoding";
@@ -339,8 +339,8 @@ Connection::Pump Connection::pump_chunked(std::string& error) {
       }
       if (!read_raw_line(line, eof, error)) {
         if (!error.empty()) return Pump::Error;
-        body_done_ = true;
-        return Pump::End;
+        error = "truncated chunked body";
+        return Pump::Error;
       }
       if (line.empty()) continue;
       const auto semicolon = line.find(';');
@@ -367,8 +367,8 @@ Connection::Pump Connection::pump_chunked(std::string& error) {
     }
     if (raw_.empty() && !fill_raw(error)) {
       if (!error.empty()) return Pump::Error;
-      body_done_ = true;
-      return Pump::End;
+      error = "truncated chunked body";
+      return Pump::Error;
     }
     const std::size_t take = static_cast<std::size_t>(std::min<long long>(
         static_cast<long long>(raw_.size()), chunk_remaining_));
@@ -383,10 +383,13 @@ Connection::Pump Connection::pump_chunked(std::string& error) {
 bool send_request(Connection& conn, const std::string& method,
                   const std::string& target, const std::string& host,
                   const std::string& body, const std::string& accept,
-                  std::string& error) {
+                  const std::string& api_key, std::string& error) {
   std::string request = method + " " + target + " HTTP/1.1\r\n";
   request += "Host: " + host + "\r\n";
   request += "Accept: " + accept + "\r\n";
+  if (!api_key.empty()) {
+    request += "Authorization: Bearer " + api_key + "\r\n";
+  }
   request += "Connection: close\r\n";
   if (!body.empty()) {
     request += "Content-Type: application/json\r\n";
@@ -399,7 +402,8 @@ bool send_request(Connection& conn, const std::string& method,
 
 }  // namespace
 
-HttpClient::HttpClient(std::string base_url) : base_url_(std::move(base_url)) {}
+HttpClient::HttpClient(std::string base_url, std::string api_key)
+    : base_url_(std::move(base_url)), api_key_(std::move(api_key)) {}
 
 HttpResponse HttpClient::request(const std::string& method,
                                  const std::string& path,
@@ -411,7 +415,7 @@ HttpResponse HttpClient::request(const std::string& method,
   Connection conn;
   if (!conn.open(url, response.error)) return response;
   if (!send_request(conn, method, url.prefix + path, url.host, body,
-                    "application/json", response.error)) {
+                    "application/json", api_key_, response.error)) {
     return response;
   }
   if (!conn.read_headers(response.status, response.error)) return response;
@@ -437,7 +441,7 @@ bool HttpClient::stream(const std::string& method, const std::string& path,
   Connection conn;
   if (!conn.open(url, error)) return false;
   if (!send_request(conn, method, url.prefix + path, url.host, body,
-                    "text/event-stream", error)) {
+                    "text/event-stream", api_key_, error)) {
     return false;
   }
 

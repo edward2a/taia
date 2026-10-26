@@ -10,6 +10,11 @@ int main(int argc, char** argv) {
   }
   if (argc > 1) base_url = argv[1];
 
+  std::string api_key;
+  if (const char* env = std::getenv("TAIA_API_KEY")) {
+    api_key = env;
+  }
+
   taia::App app;
-  return app.run(base_url);
+  return app.run(base_url, api_key);
 }
