@@ -736,10 +736,11 @@ class ExecCommandTool : public Tool {
           ::waitid(P_PID, static_cast<id_t>(pid), &info,
                    WEXITED | WNOHANG | WNOWAIT);
       if (wait_rc == 0 && info.si_pid == pid) {
+        kill_child();
         exited = true;
       } else if (wait_rc < 0 && errno == ECHILD) {
-        exited = true;
-        status = 0;
+        ::close(pipe_fds[0]);
+        return failure("lost child process");
       }
     }
 
@@ -747,9 +748,7 @@ class ExecCommandTool : public Tool {
       kill_child();
       while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
       }
-      exited = true;
     } else {
-      kill_child();
       while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
       }
     }
