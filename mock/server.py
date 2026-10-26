@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -235,13 +236,13 @@ def select_tool_call(messages, tools):
     lowered = content.lower()
     if "list_files" in names and "list" in lowered:
         return make_tool_call("list_files", {"path": "."})
-    search_index = lowered.find("search")
-    if "search" in names and search_index >= 0:
-        query = content[search_index + len("search") :].strip() or "TODO"
+    search_match = re.search(r"search", content, re.IGNORECASE | re.ASCII)
+    if "search" in names and search_match:
+        query = content[search_match.end() :].strip() or "TODO"
         return make_tool_call("search", {"query": query})
-    read_index = lowered.find("read")
-    if "read_file" in names and read_index >= 0:
-        path = content[read_index + len("read") :].strip() or "README.md"
+    read_match = re.search(r"read", content, re.IGNORECASE | re.ASCII)
+    if "read_file" in names and read_match:
+        path = content[read_match.end() :].strip() or "README.md"
         return make_tool_call("read_file", {"path": path})
     return None
 

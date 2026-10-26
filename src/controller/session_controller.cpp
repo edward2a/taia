@@ -10,6 +10,16 @@ namespace {
 
 constexpr std::size_t kMaxHistoryBytes = 512 * 1024;
 constexpr std::size_t kMaxToolOutputPerTurn = 256 * 1024;
+constexpr std::size_t kMaxUserPromptBytes = 64 * 1024;
+constexpr std::size_t kMaxAssistantBytes = 128 * 1024;
+
+std::string capped(std::string text, std::size_t limit, const char* marker) {
+  if (text.size() > limit) {
+    text.resize(limit);
+    text += marker;
+  }
+  return text;
+}
 
 std::size_t message_bytes(const client::ChatMessage& message) {
   std::size_t total = message.role.size() + message.content.size() +
@@ -247,17 +257,25 @@ void SessionController::trim_history() {
   for (const client::ChatMessage& message : history_) {
     total += message_bytes(message);
   }
-  while (total > kMaxHistoryBytes && history_.size() > 1) {
-    std::size_t next_user = 1;
-    while (next_user < history_.size() &&
-           history_[next_user].role != "user") {
-      ++next_user;
+  while (total > kMaxHistoryBytes && !history_.empty()) {
+    if (history_.size() > 1) {
+      std::size_t next_user = 1;
+      while (next_user < history_.size() &&
+             history_[next_user].role != "user") {
+        ++next_user;
+      }
+      if (next_user >= history_.size()) break;
+      for (std::size_t i = 0; i < next_user; ++i) {
+        total -= message_bytes(history_[i]);
+      }
+      history_.erase(history_.begin(), history_.begin() + next_user);
+      continue;
     }
-    if (next_user >= history_.size()) break;
-    for (std::size_t i = 0; i < next_user; ++i) {
-      total -= message_bytes(history_[i]);
-    }
-    history_.erase(history_.begin(), history_.begin() + next_user);
+    client::ChatMessage& message = history_.front();
+    const std::size_t excess = total - kMaxHistoryBytes;
+    if (message.content.size() <= excess) break;
+    message.content.resize(message.content.size() - excess);
+    total -= excess;
   }
 }
 
@@ -268,7 +286,8 @@ void SessionController::do_submit_prompt(const std::string& model,
     return;
   }
   if (!begin_request()) return;
-  history_.push_back({"user", text});
+  history_.push_back(
+      {"user", capped(text, kMaxUserPromptBytes, "\n[prompt truncated]")});
   const auto definitions = tools_.definitions();
   constexpr int kMaxRounds = 8;
   constexpr std::size_t kMaxToolCalls = 8;
@@ -302,7 +321,9 @@ void SessionController::do_submit_prompt(const std::string& model,
       return;
     }
     if (result.tool_calls.empty()) {
-      history_.push_back({"assistant", result.content});
+      history_.push_back(
+          {"assistant", capped(result.content, kMaxAssistantBytes,
+                               "\n[response truncated]")});
       push_event({ControllerEvent::Type::StreamDone, {}, "", true});
       return;
     }
@@ -314,7 +335,8 @@ void SessionController::do_submit_prompt(const std::string& model,
     const std::size_t history_before_assistant = history_.size();
     client::ChatMessage assistant;
     assistant.role = "assistant";
-    assistant.content = result.content;
+    assistant.content = capped(result.content, kMaxAssistantBytes,
+                               "\n[response truncated]");
     assistant.tool_calls = result.tool_calls;
     history_.push_back(std::move(assistant));
     for (const client::ToolCall& call : result.tool_calls) {
@@ -350,6 +372,15 @@ void SessionController::do_submit_prompt(const std::string& model,
       tool.content = output;
       tool.tool_call_id = call.id;
       history_.push_back(std::move(tool));
+    }
+    if (stopping_) {
+      history_.resize(history_before_assistant);
+      return;
+    }
+    if (cancel_) {
+      history_.resize(history_before_assistant);
+      push_event({ControllerEvent::Type::StreamDone, {}, "", true});
+      return;
     }
   }
   push_event(
