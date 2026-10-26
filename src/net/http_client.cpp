@@ -101,6 +101,9 @@ bool is_token(const std::string& name) {
   return true;
 }
 
+constexpr int kMaxResolverThreads = 4;
+std::atomic<int> g_resolver_threads{0};
+
 struct ResolveState {
   std::mutex mutex;
   std::condition_variable cv;
@@ -114,6 +117,11 @@ bool resolve_address(const std::string& host, const std::string& port,
                      const std::atomic<bool>* cancel,
                      std::chrono::steady_clock::time_point deadline,
                      addrinfo*& out, std::string& error) {
+  if (g_resolver_threads.fetch_add(1) >= kMaxResolverThreads) {
+    g_resolver_threads.fetch_sub(1);
+    error = "too many pending resolutions";
+    return false;
+  }
   auto state = std::make_shared<ResolveState>();
   std::thread worker([state, host, port] {
     addrinfo hints{};
@@ -130,6 +138,7 @@ bool resolve_address(const std::string& host, const std::string& port,
       state->done = true;
     }
     state->cv.notify_all();
+    g_resolver_threads.fetch_sub(1);
   });
   worker.detach();
 
@@ -146,6 +155,16 @@ bool resolve_address(const std::string& host, const std::string& port,
       return false;
     }
     state->cv.wait_for(lock, std::chrono::milliseconds(100));
+  }
+  const bool cancelled = cancel != nullptr && cancel->load();
+  const bool expired = std::chrono::steady_clock::now() >= deadline;
+  if (cancelled || expired) {
+    if (state->info != nullptr) {
+      ::freeaddrinfo(state->info);
+      state->info = nullptr;
+    }
+    error = cancelled ? "cancelled" : "timed out resolving " + host;
+    return false;
   }
   if (state->rc != 0) {
     error = "cannot resolve " + host + ": " + ::gai_strerror(state->rc);

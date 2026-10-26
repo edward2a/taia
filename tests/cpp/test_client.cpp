@@ -387,6 +387,16 @@ void test_malformed_chunk_trailer() {
         "malformed trailer message: " + error);
 }
 
+void test_cancel_before_request() {
+  std::atomic<bool> cancel{true};
+  LlamaClient llama("http://example.invalid:1");
+  std::vector<ModelInfo> models;
+  std::string error;
+  check(!llama.list_models(models, error, &cancel),
+        "pre-cancelled request fails");
+  check(error == "cancelled", "pre-cancelled message: " + error);
+}
+
 void test_controller_unload_polling() {
   const std::string loaded =
       "{\"object\":\"list\",\"data\":[{\"id\":\"m\","
@@ -460,6 +470,7 @@ int main() {
   test_load_unexpected_body();
   test_truncated_chunk_trailer();
   test_malformed_chunk_trailer();
+  test_cancel_before_request();
   test_controller_unload_polling();
   test_controller_shutdown_stall();
   if (failures == 0) {
