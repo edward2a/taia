@@ -657,6 +657,7 @@ class ExecCommandTool : public Tool {
                          const ToolContext& context) const {
     int pipe_fds[2];
     if (::pipe(pipe_fds) != 0) return failure("cannot create pipe");
+    std::signal(SIGCHLD, SIG_DFL);
     const pid_t pid = ::fork();
     if (pid < 0) {
       ::close(pipe_fds[0]);
