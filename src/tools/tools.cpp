@@ -557,20 +557,33 @@ class WriteFileTool : public Tool {
       return failure("file changed since approval; not written");
     }
 
-    const std::string temp_template =
-        (target.parent_path() /
-         (".taia_tmp_" + target.filename().string() + "_XXXXXX"))
-            .string();
-    std::vector<char> temp_buffer(temp_template.begin(), temp_template.end());
-    temp_buffer.push_back('\0');
-    const int temp_fd = ::mkstemp(temp_buffer.data());
+    std::string temp_path;
+    int temp_fd = -1;
+    for (int attempt = 0; attempt < 10 && temp_fd < 0; ++attempt) {
+      const std::string temp_template =
+          (target.parent_path() /
+           (".taia_tmp_" + target.filename().string() + "_XXXXXX"))
+              .string();
+      std::vector<char> temp_buffer(temp_template.begin(),
+                                    temp_template.end());
+      temp_buffer.push_back('\0');
+      const int probe = ::mkstemp(temp_buffer.data());
+      if (probe < 0) return failure("cannot write file");
+      const std::string candidate(temp_buffer.data());
+      ::close(probe);
+      ::unlink(candidate.c_str());
+      temp_fd = ::open(candidate.c_str(),
+                       O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0666);
+      if (temp_fd >= 0) {
+        temp_path = candidate;
+      } else if (errno != EEXIST) {
+        return failure("cannot write file");
+      }
+    }
     if (temp_fd < 0) return failure("cannot write file");
-    const std::string temp_path(temp_buffer.data());
     struct stat existing {};
     if (existed && ::stat(target.c_str(), &existing) == 0) {
       ::fchmod(temp_fd, existing.st_mode & 0777);
-    } else {
-      ::fchmod(temp_fd, 0644);
     }
     std::size_t written = 0;
     bool write_ok = true;
@@ -584,7 +597,7 @@ class WriteFileTool : public Tool {
       }
       written += static_cast<std::size_t>(count);
     }
-    ::close(temp_fd);
+    if (::close(temp_fd) != 0) write_ok = false;
     if (!write_ok) {
       ::unlink(temp_path.c_str());
       return failure("cannot write file");
@@ -718,11 +731,16 @@ class ExecCommandTool : public Tool {
       } else if (ready < 0 && errno != EINTR) {
         break;
       }
-      pid_t done = ::waitpid(pid, &status, WNOHANG);
-      while (done < 0 && errno == EINTR) {
-        done = ::waitpid(pid, &status, WNOHANG);
+      siginfo_t info {};
+      const int wait_rc =
+          ::waitid(P_PID, static_cast<id_t>(pid), &info,
+                   WEXITED | WNOHANG | WNOWAIT);
+      if (wait_rc == 0 && info.si_pid == pid) {
+        exited = true;
+      } else if (wait_rc < 0 && errno == ECHILD) {
+        exited = true;
+        status = 0;
       }
-      if (done == pid) exited = true;
     }
 
     if (!exited) {
@@ -730,8 +748,11 @@ class ExecCommandTool : public Tool {
       while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
       }
       exited = true;
+    } else {
+      kill_child();
+      while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+      }
     }
-    kill_child();
     while (true) {
       char buffer[4096];
       const ssize_t count = ::read(pipe_fds[0], buffer, sizeof(buffer));

@@ -4,6 +4,8 @@
 #include <iostream>
 #include <string>
 #include <system_error>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <thread>
 
 #include <unistd.h>
@@ -214,6 +216,17 @@ void test_write_file() {
         "rejected write message: " + result.content);
   check(!fs::exists(workspace.path() / "rejected.txt"),
         "rejected write did not create file");
+
+  context.approve = [](const std::string&) { return true; };
+  const mode_t previous_umask = ::umask(077);
+  result = registry.execute(
+      "write_file", "{\"path\":\"mode.txt\",\"content\":\"x\"}", context);
+  ::umask(previous_umask);
+  check(result.ok, "umask write succeeds: " + result.content);
+  struct stat mode_stat {};
+  check(::stat((workspace.path() / "mode.txt").c_str(), &mode_stat) == 0,
+        "mode file exists");
+  check((mode_stat.st_mode & 0777) == 0600, "umask respected");
 
   context.approve = [&](const std::string&) {
     std::ofstream(workspace.path() / "alpha.txt") << "changed\n";
