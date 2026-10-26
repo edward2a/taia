@@ -6,6 +6,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
+#include <exception>
 #include <fcntl.h>
 #include <memory>
 #include <mutex>
@@ -117,30 +118,45 @@ bool resolve_address(const std::string& host, const std::string& port,
                      const std::atomic<bool>* cancel,
                      std::chrono::steady_clock::time_point deadline,
                      addrinfo*& out, std::string& error) {
-  if (g_resolver_threads.fetch_add(1) >= kMaxResolverThreads) {
-    g_resolver_threads.fetch_sub(1);
-    error = "too many pending resolutions";
+  if (cancel != nullptr && cancel->load()) {
+    error = "cancelled";
     return false;
   }
-  auto state = std::make_shared<ResolveState>();
-  std::thread worker([state, host, port] {
-    addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    addrinfo* info = nullptr;
-    const int rc = ::getaddrinfo(host.c_str(), port.c_str(), &hints, &info);
-    std::lock_guard<std::mutex> lock(state->mutex);
-    state->rc = rc;
-    if (state->abandoned) {
-      if (info != nullptr) ::freeaddrinfo(info);
-    } else {
-      state->info = info;
-      state->done = true;
-    }
-    state->cv.notify_all();
+  if (g_resolver_threads.fetch_add(1) >= kMaxResolverThreads) {
     g_resolver_threads.fetch_sub(1);
-  });
-  worker.detach();
+    if (cancel != nullptr && cancel->load()) {
+      error = "cancelled";
+    } else {
+      error = "too many pending resolutions";
+    }
+    return false;
+  }
+  std::shared_ptr<ResolveState> state;
+  try {
+    state = std::make_shared<ResolveState>();
+    std::thread worker([state, host, port] {
+      addrinfo hints{};
+      hints.ai_family = AF_UNSPEC;
+      hints.ai_socktype = SOCK_STREAM;
+      addrinfo* info = nullptr;
+      const int rc = ::getaddrinfo(host.c_str(), port.c_str(), &hints, &info);
+      std::lock_guard<std::mutex> lock(state->mutex);
+      state->rc = rc;
+      if (state->abandoned) {
+        if (info != nullptr) ::freeaddrinfo(info);
+      } else {
+        state->info = info;
+        state->done = true;
+      }
+      state->cv.notify_all();
+      g_resolver_threads.fetch_sub(1);
+    });
+    worker.detach();
+  } catch (const std::exception& exc) {
+    g_resolver_threads.fetch_sub(1);
+    error = std::string("cannot start resolver: ") + exc.what();
+    return false;
+  }
 
   std::unique_lock<std::mutex> lock(state->mutex);
   while (!state->done) {
