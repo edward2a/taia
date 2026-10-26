@@ -15,8 +15,10 @@
   before the first token; `TAIA_STREAM_IDLE_TIMEOUT_SECONDS` (default 30) covers
   stalls between chunks.
 - Agent tools: `list_files`, `search`, `read_file` are scoped to the workspace;
-  the server must support OpenAI-style tool calls (`--jinja` with a compatible
-  template).
+  `write_file` and `exec_command` require approval. Commands run with
+  `/bin/bash -lc` in the workspace under the application user's permissions, so
+  approval is not a sandbox. The server must support OpenAI-style tool calls
+  (`--jinja` with a compatible template).
 - C++ tests: `ctest --test-dir build --output-on-failure`
 
 Python tests use the stdlib `unittest`.

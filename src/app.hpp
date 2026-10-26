@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -25,6 +26,8 @@ class App {
   std::string selected_model_;
   bool awaiting_initial_models_ = false;
   bool assistant_open_ = false;
+  bool approval_pending_ = false;
+  std::uint64_t approval_id_ = 0;
   cpptui::TimerId poll_timer_{};
 };
 

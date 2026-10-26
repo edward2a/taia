@@ -6,12 +6,13 @@
 
 #include "cpptui.hpp"
 #include "ui/actions.hpp"
+#include "ui/approval_view.hpp"
 #include "ui/conversation_view.hpp"
 #include "ui/prompt_input.hpp"
 
 namespace taia::ui {
 
-enum class RunState { Idle, Loading, Generating, Tool, Error };
+enum class RunState { Idle, Loading, Generating, Tool, Approval, Error };
 
 class ChatUi {
  public:
@@ -33,6 +34,8 @@ class ChatUi {
 
   void submit_prompt();
   void focus_prompt();
+  void show_approval(const std::string& text);
+  void hide_approval();
 
  private:
   void emit(ActionType type, const std::string& text = "");
@@ -45,6 +48,7 @@ class ChatUi {
 
   std::shared_ptr<cpptui::Vertical> root_;
   std::shared_ptr<ConversationView> conversation_;
+  std::shared_ptr<ApprovalView> approval_view_;
   std::shared_ptr<cpptui::Dropdown> model_dropdown_;
   std::shared_ptr<cpptui::Label> state_label_;
   std::shared_ptr<cpptui::Label> agent_label_;

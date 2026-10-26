@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
@@ -23,6 +24,7 @@ struct ControllerEvent {
     Delta,
     ToolStarted,
     ToolFinished,
+    ApprovalRequest,
     StreamDone,
     Error,
   };
@@ -31,6 +33,7 @@ struct ControllerEvent {
   std::vector<client::ModelInfo> models;
   std::string text;
   bool ok = true;
+  std::uint64_t request_id = 0;
 };
 
 class SessionController {
@@ -54,6 +57,7 @@ class SessionController {
   void unload_model();
   void submit_prompt(const std::string& text);
   void cancel_stream();
+  void resolve_approval(std::uint64_t id, bool approved);
 
   bool poll_event(ControllerEvent& event);
 
@@ -69,6 +73,7 @@ class SessionController {
   void do_submit_prompt(const std::string& model, const std::string& text);
   std::size_t trim_history();
   void drop_last_turn();
+  bool request_approval(const std::string& preview);
 
   client::LlamaClient client_;
   tools::ToolRegistry tools_;
@@ -88,6 +93,13 @@ class SessionController {
 
   std::mutex event_mutex_;
   std::deque<ControllerEvent> events_;
+
+  std::mutex approval_mutex_;
+  std::condition_variable approval_cv_;
+  bool approval_pending_ = false;
+  bool approval_approved_ = false;
+  std::uint64_t approval_id_ = 0;
+  std::uint64_t approval_counter_ = 0;
 };
 
 }

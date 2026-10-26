@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -20,6 +21,7 @@ struct ToolContext {
   std::filesystem::path workspace;
   const std::atomic<bool>* cancel = nullptr;
   std::size_t max_output_bytes = 65536;
+  std::function<bool(const std::string&)> approve;
 };
 
 class Tool {

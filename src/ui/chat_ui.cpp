@@ -36,6 +36,14 @@ ChatUi::ChatUi(cpptui::App* app, ActionSink sink)
   conversation_ = std::make_shared<ConversationView>();
   root_->add(conversation_);
 
+  approval_view_ = std::make_shared<ApprovalView>();
+  approval_view_->fixed_height = 12;
+  approval_view_->visible = false;
+  approval_view_->on_decision = [this](bool approved) {
+    emit(approved ? ActionType::Approve : ActionType::Reject);
+  };
+  root_->add(approval_view_);
+
   error_label_ = std::make_shared<cpptui::Label>(cpptui::StyledText(""));
   error_label_->fixed_height = 1;
   error_label_->fg_color = cpptui::Theme::current().error;
@@ -197,6 +205,10 @@ void ChatUi::set_state(RunState state) {
       label = "TOOL";
       color = t.warning;
       break;
+    case RunState::Approval:
+      label = "APPROVAL";
+      color = t.warning;
+      break;
     case RunState::Error:
       label = "ERROR";
       color = t.error;
@@ -232,6 +244,19 @@ void ChatUi::set_error(const std::string& message) {
 void ChatUi::clear_error() { set_error(""); }
 
 void ChatUi::focus_prompt() { prompt_input_->set_focus(true); }
+
+void ChatUi::show_approval(const std::string& text) {
+  approval_view_->set_content(text);
+  approval_view_->visible = true;
+  approval_view_->set_focus(true);
+  app_->update();
+}
+
+void ChatUi::hide_approval() {
+  approval_view_->visible = false;
+  focus_prompt();
+  app_->update();
+}
 
 void ChatUi::submit_prompt() {
   std::string text = prompt_input_->get_text();

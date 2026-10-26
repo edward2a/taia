@@ -297,6 +297,10 @@ The Python mock emulates these routes for development and tests.
   `query`.
 - A user prompt containing `read` calls `read_file` with the remaining text as
   `path`.
+- A user prompt containing `write` calls `write_file` with `new.txt` and the
+  content `hello\n`.
+- A user prompt containing `run` calls `exec_command` with the remaining text as
+  `command`.
 - When the last message is a tool result, the mock streams
   `tool result: <content>` and finishes with `stop`.
 - Streamed tool calls split `function.arguments` across two deltas to exercise

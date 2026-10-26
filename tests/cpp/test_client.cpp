@@ -196,6 +196,27 @@ std::string sse_chunk(const json& delta, const json& finish_reason) {
   return sse(event.dump());
 }
 
+std::string tool_call_body(const std::string& name, const std::string& args) {
+  json call;
+  call["index"] = 0;
+  call["id"] = "call_1";
+  call["type"] = "function";
+  call["function"]["name"] = name;
+  call["function"]["arguments"] = args;
+  const json delta = {{"tool_calls", json::array({call})}};
+  return sse_chunk({{"role", "assistant"}, {"content", nullptr}}, nullptr) +
+         sse_chunk(delta, nullptr) +
+         sse_chunk(json::object(), "tool_calls") +
+         sse(std::string("[") + "DONE" + "]");
+}
+
+std::string text_body(const std::string& text) {
+  return sse_chunk({{"role", "assistant"}, {"content", nullptr}}, nullptr) +
+         sse_chunk({{"content", text}}, nullptr) +
+         sse_chunk(json::object(), "stop") +
+         sse(std::string("[") + "DONE" + "]");
+}
+
 std::string partial_chunked_sse(const std::string& payload) {
   const std::string data = sse(payload);
   std::ostringstream size;
@@ -756,6 +777,80 @@ void test_controller_tool_loop() {
   fs::remove_all(workspace, ec);
 }
 
+void test_controller_approval() {
+  auto run_case = [](bool approve) {
+    std::error_code ec;
+    const fs::path workspace =
+        fs::temp_directory_path(ec) /
+        ("taia_ctrl_approval_" + std::to_string(::getpid()) +
+         (approve ? "_yes" : "_no"));
+    fs::remove_all(workspace, ec);
+    fs::create_directories(workspace, ec);
+    const std::string args =
+        "{\"path\":\"out.txt\",\"content\":\"hello\\n\"}";
+    FakeServer server(
+        {chunked_response("text/event-stream",
+                          tool_call_body("write_file", args)),
+         chunked_response("text/event-stream", text_body("done"))});
+    SessionController controller(server.base_url(), "", {},
+                                 workspace.string());
+    controller.start();
+    controller.set_selected_model("mock/small");
+    controller.submit_prompt("write it");
+
+    bool request_seen = false;
+    bool resolved = false;
+    bool done = false;
+    std::string preview;
+    std::string error;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline && !done) {
+      ControllerEvent event;
+      while (controller.poll_event(event)) {
+        if (event.type == ControllerEvent::Type::ApprovalRequest) {
+          request_seen = true;
+          preview = event.text;
+          if (!resolved) {
+            controller.resolve_approval(event.request_id, approve);
+            resolved = true;
+          }
+        }
+        if (event.type == ControllerEvent::Type::StreamDone ||
+            event.type == ControllerEvent::Type::Error) {
+          done = true;
+          if (event.type == ControllerEvent::Type::Error) error = event.text;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    controller.stop();
+    check(request_seen, approve ? "approval requested (approve)"
+                                : "approval requested (reject)");
+    check(preview.find("+hello") != std::string::npos,
+          "approval preview shows content: " + preview);
+    check(done, approve ? "approval turn done (approve)"
+                        : "approval turn done (reject)");
+    check(error.empty(), "approval error: " + error);
+    const bool exists = fs::exists(workspace / "out.txt", ec);
+    if (approve) {
+      check(exists, "approved write exists");
+      std::ifstream input(workspace / "out.txt");
+      const std::string content((std::istreambuf_iterator<char>(input)),
+                                std::istreambuf_iterator<char>());
+      check(content == "hello\n", "approved write content");
+    } else {
+      check(!exists, "rejected write absent");
+      check(server.request_headers().find("rejected by user") !=
+                std::string::npos,
+            "rejection sent to model");
+    }
+    fs::remove_all(workspace, ec);
+  };
+  run_case(true);
+  run_case(false);
+}
+
 void test_controller_shutdown_stall() {
   FakeServer server(std::vector<std::string>{std::string()});
   SessionController controller(server.base_url());
@@ -806,6 +901,7 @@ int main() {
   test_invalid_utf8_tool_content();
   test_controller_unload_polling();
   test_controller_tool_loop();
+  test_controller_approval();
   test_controller_shutdown_stall();
   if (failures == 0) {
     std::cout << "all client tests passed\n";

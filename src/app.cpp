@@ -7,6 +7,10 @@
 namespace taia {
 
 void App::handle_action(const ui::Action& action) {
+  if (approval_pending_ && action.type != ui::ActionType::Approve &&
+      action.type != ui::ActionType::Reject) {
+    return;
+  }
   switch (action.type) {
     case ui::ActionType::SubmitPrompt:
       chat_->clear_error();
@@ -32,6 +36,20 @@ void App::handle_action(const ui::Action& action) {
     case ui::ActionType::RefreshModels:
       chat_->clear_error();
       if (controller_) controller_->refresh_models();
+      break;
+    case ui::ActionType::Approve:
+      if (!approval_pending_) break;
+      approval_pending_ = false;
+      if (controller_) controller_->resolve_approval(approval_id_, true);
+      chat_->hide_approval();
+      chat_->set_state(ui::RunState::Tool);
+      break;
+    case ui::ActionType::Reject:
+      if (!approval_pending_) break;
+      approval_pending_ = false;
+      if (controller_) controller_->resolve_approval(approval_id_, false);
+      chat_->hide_approval();
+      chat_->set_state(ui::RunState::Tool);
       break;
   }
 }
@@ -99,12 +117,26 @@ void App::drain_events() {
         chat_->set_state(ui::RunState::Generating);
         break;
       }
+      case ControllerEvent::Type::ApprovalRequest:
+        approval_id_ = event.request_id;
+        approval_pending_ = true;
+        chat_->show_approval(event.text);
+        chat_->set_state(ui::RunState::Approval);
+        break;
       case ControllerEvent::Type::StreamDone:
         assistant_open_ = false;
+        if (approval_pending_) {
+          approval_pending_ = false;
+          chat_->hide_approval();
+        }
         chat_->set_state(ui::RunState::Idle);
         break;
       case ControllerEvent::Type::Error:
         assistant_open_ = false;
+        if (approval_pending_) {
+          approval_pending_ = false;
+          chat_->hide_approval();
+        }
         chat_->set_error(event.text);
         chat_->set_state(ui::RunState::Error);
         break;

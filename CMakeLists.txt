@@ -34,6 +34,7 @@ add_executable(taia_ct
   src/controller/session_controller.cpp
   src/net/http_client.cpp
   src/tools/tools.cpp
+  src/ui/approval_view.cpp
   src/ui/chat_ui.cpp
   src/ui/conversation_view.cpp
   src/ui/prompt_input.cpp

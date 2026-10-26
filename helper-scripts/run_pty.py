@@ -32,6 +32,8 @@ def main():
     start_wait = float(os.environ.get("PTY_START_WAIT", "1.0"))
     key_wait = float(os.environ.get("PTY_KEY_WAIT", "1.2"))
     tail_wait = float(os.environ.get("PTY_TAIL_WAIT", "1.0"))
+    decision = os.environ.get("PTY_DECISION_KEYS", "")
+    decision_wait = float(os.environ.get("PTY_DECISION_WAIT", "0"))
 
     pid, fd = pty.fork()
     if pid == 0:
@@ -43,6 +45,9 @@ def main():
     drain(fd, out, start_wait)
     os.write(fd, keys)
     drain(fd, out, key_wait)
+    if decision:
+        os.write(fd, decision.encode().decode("unicode_escape").encode())
+        drain(fd, out, decision_wait)
     os.write(fd, b"q")
     drain(fd, out, tail_wait)
 

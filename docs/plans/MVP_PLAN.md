@@ -67,9 +67,10 @@ Build a lightweight C++ coding agent using cpp-tui, with an experience comparabl
 
 Remote LLM providers, model downloads, llama-server process management, persistent chat history, multimodal input, semantic indexing, MCP/plugins, and multi-agent workflows.
 
-## Open Decision
+## Command execution
 
-Choose the initial operating-system and shell support before implementing command execution. Keep this decision out of the UI/mock milestone.
+The initial implementation supports Linux/bash only: `/bin/bash -lc` runs in the
+workspace under the application user's permissions. Approval is not a sandbox.
 
 ## References
 

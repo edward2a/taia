@@ -2,10 +2,18 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <chrono>
+#include <csignal>
+#include <cstdlib>
+#include <fcntl.h>
 #include <fstream>
 #include <iterator>
+#include <poll.h>
 #include <sstream>
 #include <system_error>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <utility>
 
 #include <nlohmann/json.hpp>
@@ -21,6 +29,8 @@ constexpr std::size_t kMaxSearchFileBytes = 1024 * 1024;
 constexpr std::size_t kMaxReadFileBytes = 16 * 1024 * 1024;
 constexpr std::size_t kMaxSearchFiles = 5000;
 constexpr std::size_t kMaxLineChars = 2000;
+constexpr std::size_t kMaxWriteBytes = 128 * 1024;
+constexpr std::size_t kMaxPreviewBytes = 160 * 1024;
 
 ToolResult failure(const std::string& message) { return {false, message}; }
 
@@ -416,6 +426,316 @@ class ReadFileTool : public Tool {
   }
 };
 
+std::vector<std::string> split_lines(const std::string& text) {
+  std::vector<std::string> lines;
+  std::size_t start = 0;
+  while (start < text.size()) {
+    const std::size_t end = text.find('\n', start);
+    if (end == std::string::npos) {
+      lines.push_back(text.substr(start));
+      break;
+    }
+    std::string line = text.substr(start, end - start);
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    lines.push_back(std::move(line));
+    start = end + 1;
+  }
+  return lines;
+}
+
+std::string diff_preview(const std::string& old_text,
+                         const std::string& new_text) {
+  const std::vector<std::string> old_lines = split_lines(old_text);
+  const std::vector<std::string> new_lines = split_lines(new_text);
+  std::size_t prefix = 0;
+  while (prefix < old_lines.size() && prefix < new_lines.size() &&
+         old_lines[prefix] == new_lines[prefix]) {
+    ++prefix;
+  }
+  std::size_t suffix = 0;
+  while (suffix < old_lines.size() - prefix &&
+         suffix < new_lines.size() - prefix &&
+         old_lines[old_lines.size() - 1 - suffix] ==
+             new_lines[new_lines.size() - 1 - suffix]) {
+    ++suffix;
+  }
+  std::string preview;
+  for (std::size_t i = prefix; i < old_lines.size() - suffix; ++i) {
+    preview += "-" + old_lines[i] + "\n";
+  }
+  for (std::size_t i = prefix; i < new_lines.size() - suffix; ++i) {
+    preview += "+" + new_lines[i] + "\n";
+  }
+  return preview;
+}
+
+class WriteFileTool : public Tool {
+ public:
+  std::string name() const override { return "write_file"; }
+
+  std::string description() const override {
+    return "Write a text file in the workspace. Requires approval.";
+  }
+
+  std::string parameters() const override {
+    return R"json({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]})json";
+  }
+
+  ToolResult execute(const std::string& arguments,
+                     const ToolContext& context) const override {
+    json args;
+    std::string error;
+    if (!parse_args(arguments, args, error)) return failure(error);
+    std::string path;
+    std::string content;
+    if (!get_string(args, "path", true, path, error)) return failure(error);
+    if (!get_string(args, "content", true, content, error)) {
+      return failure(error);
+    }
+    if (content.size() > kMaxWriteBytes) {
+      return failure("content is too large");
+    }
+    fs::path target;
+    if (!resolve_path(context, path, target, error)) return failure(error);
+    std::error_code ec;
+    const bool existed = fs::exists(target, ec);
+    std::string old_content;
+    if (existed) {
+      if (!fs::is_regular_file(target, ec)) {
+        return failure("path is not a regular file");
+      }
+      const auto size = fs::file_size(target, ec);
+      if (ec || size > kMaxWriteBytes) return failure("file is too large");
+      std::ifstream input(target, std::ios::binary);
+      if (!input) return failure("cannot read existing file");
+      old_content.assign((std::istreambuf_iterator<char>(input)),
+                         std::istreambuf_iterator<char>());
+      if (old_content.find('\0') != std::string::npos) {
+        return failure("binary file");
+      }
+    } else {
+      const fs::path parent = target.parent_path();
+      if (!fs::is_directory(parent, ec)) {
+        return failure("parent directory does not exist");
+      }
+    }
+
+    const std::string label = label_for(context.workspace, target);
+    std::string preview = "write_file " + label + "\n";
+    if (!existed) preview += "(new file)\n";
+    preview += "--- current\n+++ new\n";
+    preview += diff_preview(old_content, content);
+    if (preview.size() > kMaxPreviewBytes) {
+      return failure("preview is too large");
+    }
+    if (!context.approve || !context.approve(preview)) {
+      return failure("rejected by user");
+    }
+    if (cancelled(context)) return failure("cancelled");
+
+    std::error_code rec;
+    const bool now_exists = fs::exists(target, rec);
+    std::string current;
+    if (now_exists) {
+      if (!fs::is_regular_file(target, rec)) {
+        return failure("file changed since approval; not written");
+      }
+      const auto size = fs::file_size(target, rec);
+      if (rec || size > kMaxWriteBytes) {
+        return failure("file changed since approval; not written");
+      }
+      std::ifstream input(target, std::ios::binary);
+      if (!input) {
+        return failure("file changed since approval; not written");
+      }
+      current.assign((std::istreambuf_iterator<char>(input)),
+                     std::istreambuf_iterator<char>());
+    }
+    if (now_exists != existed || current != old_content) {
+      return failure("file changed since approval; not written");
+    }
+
+    const fs::path temp =
+        target.string() + ".taia_tmp_" + std::to_string(::getpid());
+    std::ofstream output(temp, std::ios::binary | std::ios::trunc);
+    if (!output) return failure("cannot write file");
+    output.write(content.data(), static_cast<std::streamsize>(content.size()));
+    output.close();
+    if (!output) {
+      fs::remove(temp, rec);
+      return failure("cannot write file");
+    }
+    fs::rename(temp, target, rec);
+    if (rec) {
+      fs::remove(temp, rec);
+      return failure("cannot replace file: " + rec.message());
+    }
+    return {true, "wrote " + std::to_string(content.size()) + " bytes to " +
+                      label};
+  }
+};
+
+class ExecCommandTool : public Tool {
+ public:
+  std::string name() const override { return "exec_command"; }
+
+  std::string description() const override {
+    return "Run a Linux/bash command in the workspace. Requires approval.";
+  }
+
+  std::string parameters() const override {
+    return R"json({"type":"object","properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":100,"maximum":60000}},"required":["command"]})json";
+  }
+
+  ToolResult execute(const std::string& arguments,
+                     const ToolContext& context) const override {
+    json args;
+    std::string error;
+    if (!parse_args(arguments, args, error)) return failure(error);
+    std::string command;
+    int timeout_ms = 10000;
+    if (!get_string(args, "command", true, command, error)) {
+      return failure(error);
+    }
+    if (!get_int(args, "timeout_ms", false, timeout_ms, error)) {
+      return failure(error);
+    }
+    if (command.empty()) return failure("command must not be empty");
+    if (command.size() > 8192) return failure("command is too long");
+    if (timeout_ms < 100 || timeout_ms > 60000) {
+      return failure("timeout_ms must be between 100 and 60000");
+    }
+    const std::string preview = "exec_command\ncwd: " +
+                                context.workspace.string() + "\n$ " + command +
+                                "\n";
+    if (!context.approve || !context.approve(preview)) {
+      return failure("rejected by user");
+    }
+    if (cancelled(context)) return failure("cancelled");
+    return run_command(command, timeout_ms, context);
+  }
+
+ private:
+  ToolResult run_command(const std::string& command, int timeout_ms,
+                         const ToolContext& context) const {
+    int pipe_fds[2];
+    if (::pipe(pipe_fds) != 0) return failure("cannot create pipe");
+    const pid_t pid = ::fork();
+    if (pid < 0) {
+      ::close(pipe_fds[0]);
+      ::close(pipe_fds[1]);
+      return failure("cannot fork");
+    }
+    if (pid == 0) {
+      ::setpgid(0, 0);
+      ::close(pipe_fds[0]);
+      ::dup2(pipe_fds[1], STDOUT_FILENO);
+      ::dup2(pipe_fds[1], STDERR_FILENO);
+      ::close(pipe_fds[1]);
+      ::unsetenv("TAIA_API_KEY");
+      if (::chdir(context.workspace.c_str()) != 0) ::_exit(126);
+      ::execl("/bin/bash", "bash", "-lc", command.c_str(),
+              static_cast<char*>(nullptr));
+      ::_exit(127);
+    }
+    ::setpgid(pid, pid);
+    ::close(pipe_fds[1]);
+    const int flags = ::fcntl(pipe_fds[0], F_GETFL, 0);
+    if (flags >= 0) ::fcntl(pipe_fds[0], F_SETFL, flags | O_NONBLOCK);
+
+    std::string output;
+    bool truncated = false;
+    bool timed_out = false;
+    bool killed = false;
+    int status = 0;
+    bool exited = false;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(timeout_ms);
+
+    auto append_output = [&](const char* data, std::size_t size) {
+      if (output.size() >= context.max_output_bytes) {
+        truncated = true;
+        return;
+      }
+      const std::size_t room = context.max_output_bytes - output.size();
+      const std::size_t take = std::min(room, size);
+      output.append(data, take);
+      if (take < size) truncated = true;
+    };
+
+    auto kill_child = [&] {
+      if (!killed) {
+        ::kill(-pid, SIGKILL);
+        ::kill(pid, SIGKILL);
+        killed = true;
+      }
+    };
+
+    while (!exited) {
+      if (cancelled(context)) {
+        kill_child();
+        while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+        }
+        ::close(pipe_fds[0]);
+        return failure("cancelled");
+      }
+      if (!timed_out && std::chrono::steady_clock::now() >= deadline) {
+        timed_out = true;
+        kill_child();
+      }
+      pollfd descriptor{pipe_fds[0], POLLIN, 0};
+      const int ready = ::poll(&descriptor, 1, 100);
+      if (ready > 0) {
+        char buffer[4096];
+        const ssize_t count = ::read(pipe_fds[0], buffer, sizeof(buffer));
+        if (count > 0) {
+          append_output(buffer, static_cast<std::size_t>(count));
+        }
+      } else if (ready < 0 && errno != EINTR) {
+        break;
+      }
+      pid_t done = ::waitpid(pid, &status, WNOHANG);
+      while (done < 0 && errno == EINTR) {
+        done = ::waitpid(pid, &status, WNOHANG);
+      }
+      if (done == pid) exited = true;
+    }
+
+    if (!exited) {
+      kill_child();
+      while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+      }
+      exited = true;
+    }
+    while (true) {
+      char buffer[4096];
+      const ssize_t count = ::read(pipe_fds[0], buffer, sizeof(buffer));
+      if (count > 0) {
+        append_output(buffer, static_cast<std::size_t>(count));
+        continue;
+      }
+      if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) && !exited) {
+        continue;
+      }
+      break;
+    }
+    ::close(pipe_fds[0]);
+
+    if (timed_out) {
+      return {false, "command timed out after " + std::to_string(timeout_ms) +
+                         " ms\n" + output};
+    }
+    if (WIFSIGNALED(status)) {
+      return {false, "command terminated by signal " +
+                         std::to_string(WTERMSIG(status)) + "\n" + output};
+    }
+    const int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+    std::string text = "exit code " + std::to_string(exit_code) + "\n" + output;
+    if (truncated) text += "\n[output truncated]";
+    return {exit_code == 0, std::move(text)};
+  }
+};
+
 }  // namespace
 
 void ToolRegistry::add(std::shared_ptr<Tool> tool) {
@@ -461,6 +781,8 @@ ToolRegistry make_builtin_tools() {
   registry.add(std::make_shared<ListFilesTool>());
   registry.add(std::make_shared<SearchTool>());
   registry.add(std::make_shared<ReadFileTool>());
+  registry.add(std::make_shared<WriteFileTool>());
+  registry.add(std::make_shared<ExecCommandTool>());
   return registry;
 }
 

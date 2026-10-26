@@ -11,6 +11,8 @@ enum class ActionType {
   LoadModel,
   UnloadModel,
   RefreshModels,
+  Approve,
+  Reject,
 };
 
 struct Action {

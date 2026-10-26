@@ -244,6 +244,13 @@ def select_tool_call(messages, tools):
     if "read_file" in names and read_match:
         path = content[read_match.end() :].strip() or "README.md"
         return make_tool_call("read_file", {"path": path})
+    write_match = re.search(r"write", content, re.IGNORECASE | re.ASCII)
+    if "write_file" in names and write_match:
+        return make_tool_call("write_file", {"path": "new.txt", "content": "hello\n"})
+    run_match = re.search(r"run", content, re.IGNORECASE | re.ASCII)
+    if "exec_command" in names and run_match:
+        command = content[run_match.end() :].strip() or "printf hi"
+        return make_tool_call("exec_command", {"command": command})
     return None
 
 

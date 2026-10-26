@@ -82,6 +82,7 @@ void SessionController::stop() {
     cancel_ = true;
   }
   task_cv_.notify_all();
+  approval_cv_.notify_all();
   if (worker_.joinable()) worker_.join();
   started_ = false;
 }
@@ -161,6 +162,14 @@ void SessionController::submit_prompt(const std::string& text) {
 }
 
 void SessionController::cancel_stream() { cancel_ = true; }
+
+void SessionController::resolve_approval(std::uint64_t id, bool approved) {
+  std::lock_guard<std::mutex> lock(approval_mutex_);
+  if (!approval_pending_ || approval_id_ != id) return;
+  approval_pending_ = false;
+  approval_approved_ = approved;
+  approval_cv_.notify_all();
+}
 
 void SessionController::do_refresh_models() {
   if (!begin_request()) return;
@@ -302,6 +311,24 @@ void SessionController::drop_last_turn() {
   history_.clear();
 }
 
+bool SessionController::request_approval(const std::string& preview) {
+  std::unique_lock<std::mutex> lock(approval_mutex_);
+  if (stopping_) return false;
+  const std::uint64_t id = ++approval_counter_;
+  approval_pending_ = true;
+  approval_id_ = id;
+  approval_approved_ = false;
+  lock.unlock();
+  push_event(
+      {ControllerEvent::Type::ApprovalRequest, {}, preview, true, id});
+  lock.lock();
+  approval_cv_.wait(lock,
+                    [this] { return !approval_pending_ || stopping_; });
+  const bool approved = !stopping_ && approval_approved_;
+  approval_pending_ = false;
+  return approved;
+}
+
 void SessionController::do_submit_prompt(const std::string& model,
                                          const std::string& text) {
   if (model.empty()) {
@@ -387,7 +414,10 @@ void SessionController::do_submit_prompt(const std::string& model,
       }
       push_event({ControllerEvent::Type::ToolStarted, {},
                   call.name + " " + call.arguments, true});
-      const tools::ToolContext context{workspace_, &cancel_, 32768};
+      tools::ToolContext context{workspace_, &cancel_, 32768};
+      context.approve = [this](const std::string& preview) {
+        return request_approval(preview);
+      };
       const tools::ToolResult tool_result =
           tools_.execute(call.name, call.arguments, context);
       std::string output = tool_result.content;

@@ -266,6 +266,27 @@ class MockServerTest(unittest.TestCase):
         self.assertEqual(json.loads(arguments), {"path": "."})
         self.assertEqual(finish, "tool_calls")
 
+    def test_chat_tool_call_write(self):
+        events = self.stream(
+            {
+                "model": "mock/small",
+                "stream": True,
+                "messages": [{"role": "user", "content": "write a file"}],
+                "tools": [tool_definition("write_file")],
+            }
+        )
+        done = chr(91) + "DONE" + chr(93)
+        self.assertEqual(events[-1], done)
+        arguments = ""
+        for event in events[:-1]:
+            chunk = json.loads(event)
+            for call in chunk["choices"][0]["delta"].get("tool_calls", []):
+                arguments += call.get("function", {}).get("arguments", "")
+        self.assertEqual(
+            json.loads(arguments),
+            {"path": "new.txt", "content": "hello\n"},
+        )
+
     def test_chat_tool_call_non_stream(self):
         status, body = self.request(
             "POST",
