@@ -615,6 +615,7 @@ HttpResponse HttpClient::request(const std::string& method,
 bool HttpClient::stream(const std::string& method, const std::string& path,
                         const std::string& body,
                         const std::function<bool(const SseEvent&)>& on_event,
+                        const std::function<bool()>& has_token,
                         std::string& error,
                         const std::atomic<bool>* cancel) {
   ParsedUrl url;
@@ -660,7 +661,7 @@ bool HttpClient::stream(const std::string& method, const std::string& path,
         std::string data = line.substr(5);
         if (!data.empty() && data.front() == ' ') data.erase(0, 1);
         if (!on_event(SseEvent{data})) return true;
-        if (first_event) {
+        if (first_event && has_token()) {
           conn.set_timeout(timeouts_.idle);
           first_event = false;
         }

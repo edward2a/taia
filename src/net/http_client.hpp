@@ -38,7 +38,7 @@ class HttpClient {
   bool stream(const std::string& method, const std::string& path,
               const std::string& body,
               const std::function<bool(const SseEvent&)>& on_event,
-              std::string& error,
+              const std::function<bool()>& has_token, std::string& error,
               const std::atomic<bool>* cancel = nullptr);
 
  private:

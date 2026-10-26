@@ -154,6 +154,7 @@ bool LlamaClient::chat_stream(
   done_marker += static_cast<char>(93);
   bool saw_done = false;
   bool failed = false;
+  bool saw_content = false;
   const bool transport_ok = http_.stream(
       "POST", "/v1/chat/completions", request.dump(),
       [&](const net::SseEvent& event) -> bool {
@@ -178,7 +179,10 @@ bool LlamaClient::chat_stream(
             const json& delta = choice["delta"];
             if (delta.contains("content") && delta["content"].is_string()) {
               const std::string text = delta["content"].get<std::string>();
-              if (!text.empty() && on_delta) on_delta(text);
+              if (!text.empty()) {
+                saw_content = true;
+                if (on_delta) on_delta(text);
+              }
             }
           }
         } catch (const std::exception& exc) {
@@ -188,7 +192,7 @@ bool LlamaClient::chat_stream(
         }
         return true;
       },
-      error, cancel);
+      [&] { return saw_content; }, error, cancel);
   if (!transport_ok) return false;
   if (failed) return false;
   if (!saw_done) {

@@ -426,14 +426,15 @@ void test_start_timeout_configurable() {
   check(!llama.chat_stream("mock/small", messages, nullptr, error),
         "start timeout fails");
   const auto elapsed = std::chrono::steady_clock::now() - started;
-  check(elapsed < std::chrono::seconds(10), "start timeout is honored");
+  check(elapsed >= std::chrono::milliseconds(500), "start timeout waits");
+  check(elapsed < std::chrono::seconds(3), "start timeout is honored");
   check(error.find("timed out") != std::string::npos,
         "start timeout message: " + error);
 }
 
 void test_idle_timeout_configurable() {
   const std::string payload =
-      "{\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}";
+      "{\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"}}]}";
   FakeServer server(partial_chunked_sse(payload), true);
   LlamaClient llama(server.base_url(), "",
                     {std::chrono::seconds(5), std::chrono::seconds(1)});
@@ -443,9 +444,28 @@ void test_idle_timeout_configurable() {
   check(!llama.chat_stream("mock/small", messages, nullptr, error),
         "idle timeout fails");
   const auto elapsed = std::chrono::steady_clock::now() - started;
-  check(elapsed < std::chrono::seconds(10), "idle timeout is honored");
+  check(elapsed >= std::chrono::milliseconds(500), "idle timeout waits");
+  check(elapsed < std::chrono::seconds(3), "idle timeout is honored");
   check(error.find("timed out") != std::string::npos,
         "idle timeout message: " + error);
+}
+
+void test_role_event_keeps_start_timeout() {
+  const std::string payload =
+      "{\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}";
+  FakeServer server(partial_chunked_sse(payload), true);
+  LlamaClient llama(server.base_url(), "",
+                    {std::chrono::seconds(1), std::chrono::seconds(5)});
+  std::vector<taia::client::ChatMessage> messages;
+  const auto started = std::chrono::steady_clock::now();
+  std::string error;
+  check(!llama.chat_stream("mock/small", messages, nullptr, error),
+        "role-only event times out");
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  check(elapsed < std::chrono::seconds(3),
+        "role-only event keeps start timeout");
+  check(error.find("timed out") != std::string::npos,
+        "role-only timeout message: " + error);
 }
 
 void test_controller_unload_polling() {
@@ -524,6 +544,7 @@ int main() {
   test_cancel_before_request();
   test_start_timeout_configurable();
   test_idle_timeout_configurable();
+  test_role_event_keeps_start_timeout();
   test_controller_unload_polling();
   test_controller_shutdown_stall();
   if (failures == 0) {
