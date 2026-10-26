@@ -21,9 +21,11 @@ class ApprovalView : public cpptui::Widget {
 
  private:
   int max_scroll() const;
+  int max_line_width() const;
 
   std::vector<std::string> lines_;
   int scroll_ = 0;
+  int scroll_x_ = 0;
 };
 
 }

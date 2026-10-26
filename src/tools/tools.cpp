@@ -6,12 +6,14 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
 #include <fstream>
 #include <iterator>
 #include <poll.h>
 #include <sstream>
 #include <system_error>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <utility>
@@ -555,20 +557,42 @@ class WriteFileTool : public Tool {
       return failure("file changed since approval; not written");
     }
 
-    const fs::path temp =
-        target.string() + ".taia_tmp_" + std::to_string(::getpid());
-    std::ofstream output(temp, std::ios::binary | std::ios::trunc);
-    if (!output) return failure("cannot write file");
-    output.write(content.data(), static_cast<std::streamsize>(content.size()));
-    output.close();
-    if (!output) {
-      fs::remove(temp, rec);
+    const std::string temp_template =
+        (target.parent_path() /
+         (".taia_tmp_" + target.filename().string() + "_XXXXXX"))
+            .string();
+    std::vector<char> temp_buffer(temp_template.begin(), temp_template.end());
+    temp_buffer.push_back('\0');
+    const int temp_fd = ::mkstemp(temp_buffer.data());
+    if (temp_fd < 0) return failure("cannot write file");
+    const std::string temp_path(temp_buffer.data());
+    struct stat existing {};
+    if (existed && ::stat(target.c_str(), &existing) == 0) {
+      ::fchmod(temp_fd, existing.st_mode & 0777);
+    } else {
+      ::fchmod(temp_fd, 0644);
+    }
+    std::size_t written = 0;
+    bool write_ok = true;
+    while (written < content.size()) {
+      const ssize_t count = ::write(temp_fd, content.data() + written,
+                                    content.size() - written);
+      if (count < 0) {
+        if (errno == EINTR) continue;
+        write_ok = false;
+        break;
+      }
+      written += static_cast<std::size_t>(count);
+    }
+    ::close(temp_fd);
+    if (!write_ok) {
+      ::unlink(temp_path.c_str());
       return failure("cannot write file");
     }
-    fs::rename(temp, target, rec);
-    if (rec) {
-      fs::remove(temp, rec);
-      return failure("cannot replace file: " + rec.message());
+    if (::rename(temp_path.c_str(), target.c_str()) != 0) {
+      const std::string message = std::strerror(errno);
+      ::unlink(temp_path.c_str());
+      return failure("cannot replace file: " + message);
     }
     return {true, "wrote " + std::to_string(content.size()) + " bytes to " +
                       label};
@@ -707,6 +731,7 @@ class ExecCommandTool : public Tool {
       }
       exited = true;
     }
+    kill_child();
     while (true) {
       char buffer[4096];
       const ssize_t count = ::read(pipe_fds[0], buffer, sizeof(buffer));

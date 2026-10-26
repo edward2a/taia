@@ -1,8 +1,10 @@
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
 #include <system_error>
+#include <thread>
 
 #include <unistd.h>
 
@@ -273,6 +275,15 @@ void test_exec_command() {
   check(!result.ok, "command times out");
   check(result.content.find("timed out") != std::string::npos,
         "timeout message: " + result.content);
+
+  result = registry.execute(
+      "exec_command",
+      "{\"command\":\"(sleep 1; touch late.txt) & disown; printf done\"}",
+      context);
+  check(result.ok, "background command returns: " + result.content);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+  check(!fs::exists(workspace.path() / "late.txt"),
+        "background process killed");
 }
 
 void test_output_cap() {
