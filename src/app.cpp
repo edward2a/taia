@@ -49,7 +49,16 @@ void App::drain_events() {
           ids.push_back(model.id);
         }
         if (std::find(ids.begin(), ids.end(), selected_model_) == ids.end()) {
-          selected_model_ = ids.empty() ? "" : ids.front();
+          selected_model_.clear();
+          for (const client::ModelInfo& model : event.models) {
+            if (model.status == "loaded") {
+              selected_model_ = model.id;
+              break;
+            }
+          }
+          if (selected_model_.empty()) {
+            selected_model_ = ids.empty() ? "" : ids.front();
+          }
         }
         chat_->set_models(ids, selected_model_);
         controller_->set_selected_model(selected_model_);

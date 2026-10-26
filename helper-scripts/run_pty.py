@@ -29,6 +29,9 @@ def main():
     log_path = sys.argv[3]
     keys = sys.argv[4].encode().decode("unicode_escape").encode()
     argv = sys.argv[5:]
+    start_wait = float(os.environ.get("PTY_START_WAIT", "1.0"))
+    key_wait = float(os.environ.get("PTY_KEY_WAIT", "1.2"))
+    tail_wait = float(os.environ.get("PTY_TAIL_WAIT", "1.0"))
 
     pid, fd = pty.fork()
     if pid == 0:
@@ -37,11 +40,11 @@ def main():
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
     out = bytearray()
 
-    drain(fd, out, 1.0)
+    drain(fd, out, start_wait)
     os.write(fd, keys)
-    drain(fd, out, 1.2)
+    drain(fd, out, key_wait)
     os.write(fd, b"q")
-    drain(fd, out, 1.0)
+    drain(fd, out, tail_wait)
 
     try:
         os.close(fd)
