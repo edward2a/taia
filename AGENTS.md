@@ -9,6 +9,7 @@
 - Configure: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug`
 - Build: `cmake --build build -j`
 - Run: `./build/taia_ct http://127.0.0.1:9931` (or set `TAIA_SERVER_URL`).
+- API key: set `TAIA_API_KEY` when the server requires `Authorization: Bearer`.
 - C++ tests: `ctest --test-dir build --output-on-failure`
 
 Python tests use the stdlib `unittest`.
