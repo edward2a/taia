@@ -3,6 +3,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <filesystem>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "client/llama_client.hpp"
+#include "tools/tools.hpp"
 
 namespace taia {
 
@@ -19,6 +21,8 @@ struct ControllerEvent {
     LoadFinished,
     UnloadFinished,
     Delta,
+    ToolStarted,
+    ToolFinished,
     StreamDone,
     Error,
   };
@@ -32,7 +36,8 @@ struct ControllerEvent {
 class SessionController {
  public:
   explicit SessionController(std::string base_url, std::string api_key = {},
-                             net::StreamTimeouts timeouts = {});
+                             net::StreamTimeouts timeouts = {},
+                             std::string workspace = {});
   ~SessionController();
 
   SessionController(const SessionController&) = delete;
@@ -64,6 +69,9 @@ class SessionController {
   void do_submit_prompt(const std::string& model, const std::string& text);
 
   client::LlamaClient client_;
+  tools::ToolRegistry tools_;
+  std::filesystem::path workspace_;
+  std::string system_prompt_;
   std::string selected_model_;
   std::vector<client::ChatMessage> history_;
 

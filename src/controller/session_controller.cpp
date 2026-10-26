@@ -6,8 +6,27 @@
 namespace taia {
 
 SessionController::SessionController(std::string base_url, std::string api_key,
-                                     net::StreamTimeouts timeouts)
-    : client_(std::move(base_url), std::move(api_key), timeouts) {}
+                                     net::StreamTimeouts timeouts,
+                                     std::string workspace)
+    : client_(std::move(base_url), std::move(api_key), timeouts),
+      tools_(tools::make_builtin_tools()) {
+  std::error_code ec;
+  workspace_ = workspace.empty() ? std::filesystem::current_path(ec)
+                                 : std::filesystem::path(workspace);
+  if (!ec) {
+    const auto canonical = std::filesystem::weakly_canonical(workspace_, ec);
+    if (!ec) workspace_ = canonical;
+  }
+  system_prompt_ =
+      "You are a coding agent working in " + workspace_.string() +
+      ". Use the provided read-only tools to inspect the workspace. "
+      "Use workspace-relative paths and do not claim to modify files.";
+  const std::string agents = tools::load_agents_md(workspace_);
+  if (!agents.empty()) {
+    system_prompt_ += "\n\nAGENTS.md:\n";
+    system_prompt_ += agents;
+  }
+}
 
 SessionController::~SessionController() { stop(); }
 
@@ -207,21 +226,75 @@ void SessionController::do_submit_prompt(const std::string& model,
   }
   if (!begin_request()) return;
   history_.push_back({"user", text});
-  std::string reply;
-  std::string error;
-  const bool ok = client_.chat_stream(
-      model, history_,
-      [this, &reply](const std::string& delta) {
-        reply += delta;
-        push_event({ControllerEvent::Type::Delta, {}, delta, true});
-      },
-      error, &cancel_);
-  if (!ok) {
-    push_event({ControllerEvent::Type::Error, {}, error, false});
-    return;
+  const auto definitions = tools_.definitions();
+  constexpr int kMaxRounds = 8;
+  constexpr std::size_t kMaxToolCalls = 8;
+  for (int round = 0; round < kMaxRounds; ++round) {
+    if (stopping_) return;
+    if (cancel_) {
+      push_event({ControllerEvent::Type::StreamDone, {}, "", true});
+      return;
+    }
+    std::vector<client::ChatMessage> request;
+    request.reserve(history_.size() + 1);
+    request.push_back({"system", system_prompt_});
+    request.insert(request.end(), history_.begin(), history_.end());
+    client::ChatResult result;
+    std::string error;
+    const bool ok = client_.chat_turn(
+        model, request, definitions,
+        [this](const std::string& delta) {
+          push_event({ControllerEvent::Type::Delta, {}, delta, true});
+        },
+        result, error, &cancel_);
+    if (!ok) {
+      if (stopping_) return;
+      if (error == "cancelled") {
+        push_event({ControllerEvent::Type::StreamDone, {}, "", true});
+        return;
+      }
+      push_event({ControllerEvent::Type::Error, {}, error, false});
+      return;
+    }
+    if (result.tool_calls.empty()) {
+      history_.push_back({"assistant", result.content});
+      push_event({ControllerEvent::Type::StreamDone, {}, "", true});
+      return;
+    }
+    if (result.tool_calls.size() > kMaxToolCalls) {
+      push_event({ControllerEvent::Type::Error, {},
+                  "too many tool calls in one round", false});
+      return;
+    }
+    client::ChatMessage assistant;
+    assistant.role = "assistant";
+    assistant.content = result.content;
+    assistant.tool_calls = result.tool_calls;
+    history_.push_back(std::move(assistant));
+    for (const client::ToolCall& call : result.tool_calls) {
+      if (stopping_) return;
+      if (cancel_) {
+        push_event({ControllerEvent::Type::StreamDone, {}, "", true});
+        return;
+      }
+      push_event({ControllerEvent::Type::ToolStarted, {},
+                  call.name + " " + call.arguments, true});
+      const tools::ToolContext context{workspace_, &cancel_, 32768};
+      const tools::ToolResult tool_result =
+          tools_.execute(call.name, call.arguments, context);
+      std::string output = tool_result.content;
+      if (!tool_result.ok) output = "error: " + output;
+      push_event(
+          {ControllerEvent::Type::ToolFinished, {}, output, tool_result.ok});
+      client::ChatMessage tool;
+      tool.role = "tool";
+      tool.content = output;
+      tool.tool_call_id = call.id;
+      history_.push_back(std::move(tool));
+    }
   }
-  history_.push_back({"assistant", reply});
-  push_event({ControllerEvent::Type::StreamDone, {}, "", true});
+  push_event(
+      {ControllerEvent::Type::Error, {}, "tool round limit reached", false});
 }
 
 }

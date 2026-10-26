@@ -13,7 +13,7 @@ namespace taia {
 class App {
  public:
   int run(std::string base_url, std::string api_key = {},
-          net::StreamTimeouts timeouts = {});
+          net::StreamTimeouts timeouts = {}, std::string workspace = {});
 
  private:
   void handle_action(const ui::Action& action);

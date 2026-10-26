@@ -84,6 +84,21 @@ void App::drain_events() {
         }
         chat_->append_to_last(event.text);
         break;
+      case ControllerEvent::Type::ToolStarted: {
+        assistant_open_ = false;
+        std::string call = event.text;
+        if (call.size() > 300) call = call.substr(0, 300) + "...";
+        chat_->append_message("tool", "\u2192 " + call);
+        chat_->set_state(ui::RunState::Tool);
+        break;
+      }
+      case ControllerEvent::Type::ToolFinished: {
+        std::string text = event.text;
+        if (text.size() > 2000) text = text.substr(0, 2000) + "\n...";
+        chat_->append_to_last("\n" + text);
+        chat_->set_state(ui::RunState::Generating);
+        break;
+      }
       case ControllerEvent::Type::StreamDone:
         assistant_open_ = false;
         chat_->set_state(ui::RunState::Idle);
@@ -98,12 +113,12 @@ void App::drain_events() {
 }
 
 int App::run(std::string base_url, std::string api_key,
-             net::StreamTimeouts timeouts) {
+             net::StreamTimeouts timeouts, std::string workspace) {
   cpptui::Theme::set_theme(cpptui::Theme::TokyoNight());
   chat_ = std::make_unique<ui::ChatUi>(
       &tui_, [this](const ui::Action& action) { handle_action(action); });
   controller_ = std::make_unique<SessionController>(
-      std::move(base_url), std::move(api_key), timeouts);
+      std::move(base_url), std::move(api_key), timeouts, std::move(workspace));
 
   chat_->set_models({}, "");
   chat_->set_state(ui::RunState::Loading);

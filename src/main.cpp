@@ -1,5 +1,6 @@
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 
 #include "app.hpp"
@@ -27,6 +28,14 @@ int main(int argc, char** argv) {
   timeouts.start = timeout_seconds("TAIA_STREAM_START_TIMEOUT_SECONDS", 300);
   timeouts.idle = timeout_seconds("TAIA_STREAM_IDLE_TIMEOUT_SECONDS", 30);
 
+  std::string workspace;
+  if (const char* env = std::getenv("TAIA_WORKSPACE")) {
+    workspace = env;
+  } else {
+    std::error_code ec;
+    workspace = std::filesystem::current_path(ec).string();
+  }
+
   taia::App app;
-  return app.run(base_url, api_key, timeouts);
+  return app.run(base_url, api_key, timeouts, workspace);
 }

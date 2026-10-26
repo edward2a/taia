@@ -11,7 +11,7 @@
 
 namespace taia::ui {
 
-enum class RunState { Idle, Loading, Generating, Error };
+enum class RunState { Idle, Loading, Generating, Tool, Error };
 
 class ChatUi {
  public:

@@ -193,6 +193,10 @@ void ChatUi::set_state(RunState state) {
       label = "GENERATING";
       color = t.primary;
       break;
+    case RunState::Tool:
+      label = "TOOL";
+      color = t.warning;
+      break;
     case RunState::Error:
       label = "ERROR";
       color = t.error;

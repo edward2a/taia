@@ -450,8 +450,9 @@ ToolRegistry make_builtin_tools() {
 std::string load_agents_md(const fs::path& workspace, std::size_t max_bytes) {
   std::ifstream input(workspace / "AGENTS.md", std::ios::binary);
   if (!input) return {};
-  std::string data((std::istreambuf_iterator<char>(input)),
-                   std::istreambuf_iterator<char>());
+  std::string data(max_bytes + 1, '\0');
+  input.read(data.data(), static_cast<std::streamsize>(data.size()));
+  data.resize(static_cast<std::size_t>(input.gcount()));
   if (data.size() > max_bytes) {
     data.resize(max_bytes);
     data += "\n[AGENTS.md truncated]\n";

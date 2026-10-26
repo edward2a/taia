@@ -4,6 +4,8 @@
 #include <cctype>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <netinet/in.h>
 #include <sstream>
@@ -19,6 +21,8 @@
 #include "controller/session_controller.hpp"
 
 namespace {
+
+namespace fs = std::filesystem;
 
 using nlohmann::json;
 using taia::ControllerEvent;
@@ -618,6 +622,91 @@ void test_controller_unload_polling() {
   check(!errored, "controller unload reports no error");
 }
 
+void test_controller_tool_loop() {
+  std::error_code ec;
+  const fs::path workspace = fs::temp_directory_path(ec) /
+                             ("taia_ctrl_" + std::to_string(::getpid()));
+  fs::remove_all(workspace, ec);
+  fs::create_directories(workspace, ec);
+  std::ofstream(workspace / "note.txt") << "loop file\n";
+  std::ofstream(workspace / "AGENTS.md") << "project rules\n";
+
+  json tool_call;
+  tool_call["index"] = 0;
+  tool_call["id"] = "call_1";
+  tool_call["type"] = "function";
+  tool_call["function"]["name"] = "list_files";
+  tool_call["function"]["arguments"] = "{}";
+  const json tool_delta = {{"tool_calls", json::array({tool_call})}};
+  const std::string first_body =
+      sse_chunk({{"role", "assistant"}, {"content", nullptr}}, nullptr) +
+      sse_chunk(tool_delta, nullptr) +
+      sse_chunk(json::object(), "tool_calls") +
+      sse(std::string("[") + "DONE" + "]");
+  const std::string second_body =
+      sse_chunk({{"role", "assistant"}, {"content", nullptr}}, nullptr) +
+      sse_chunk({{"content", "done"}}, nullptr) +
+      sse_chunk(json::object(), "stop") +
+      sse(std::string("[") + "DONE" + "]");
+  FakeServer server({chunked_response("text/event-stream", first_body),
+                     chunked_response("text/event-stream", second_body)});
+  SessionController controller(server.base_url(), "", {}, workspace.string());
+  controller.start();
+  controller.set_selected_model("mock/small");
+  controller.submit_prompt("list files");
+
+  std::vector<ControllerEvent> events;
+  bool done = false;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < deadline && !done) {
+    ControllerEvent event;
+    while (controller.poll_event(event)) {
+      if (event.type == ControllerEvent::Type::StreamDone ||
+          event.type == ControllerEvent::Type::Error) {
+        done = true;
+      }
+      events.push_back(event);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  controller.stop();
+
+  bool started = false;
+  bool finished = false;
+  bool delta = false;
+  bool stream_done = false;
+  std::string output;
+  std::string error;
+  for (const ControllerEvent& event : events) {
+    if (event.type == ControllerEvent::Type::ToolStarted) started = true;
+    if (event.type == ControllerEvent::Type::ToolFinished) {
+      finished = true;
+      output = event.text;
+    }
+    if (event.type == ControllerEvent::Type::Delta && event.text == "done") {
+      delta = true;
+    }
+    if (event.type == ControllerEvent::Type::StreamDone) stream_done = true;
+    if (event.type == ControllerEvent::Type::Error) error = event.text;
+  }
+  check(error.empty(), "tool loop error: " + error);
+  check(started, "tool call starts");
+  check(finished, "tool call finishes");
+  check(output.find("note.txt") != std::string::npos,
+        "tool output lists workspace file: " + output);
+  check(delta, "final assistant text");
+  check(stream_done, "tool loop completes");
+  const std::string& requests = server.request_headers();
+  check(requests.find("project rules") != std::string::npos,
+        "AGENTS.md included in system prompt");
+  check(requests.find("tool_call_id") != std::string::npos,
+        "tool result includes call id");
+  check(requests.find("note.txt") != std::string::npos,
+        "tool result sent back to model");
+  fs::remove_all(workspace, ec);
+}
+
 void test_controller_shutdown_stall() {
   FakeServer server(std::vector<std::string>{std::string()});
   SessionController controller(server.base_url());
@@ -665,6 +754,7 @@ int main() {
   test_tool_history_serialization();
   test_invalid_tool_arguments();
   test_controller_unload_polling();
+  test_controller_tool_loop();
   test_controller_shutdown_stall();
   if (failures == 0) {
     std::cout << "all client tests passed\n";
