@@ -10,6 +10,9 @@
 - Build: `cmake --build build -j`
 - Run: `./build/taia_ct http://127.0.0.1:9931` (or set `TAIA_SERVER_URL`).
 - API key: set `TAIA_API_KEY` when the server requires `Authorization: Bearer`.
+- Timeouts: `TAIA_STREAM_START_TIMEOUT_SECONDS` (default 300) covers cold prefill
+  before the first token; `TAIA_STREAM_IDLE_TIMEOUT_SECONDS` (default 30) covers
+  stalls between chunks.
 - C++ tests: `ctest --test-dir build --output-on-failure`
 
 Python tests use the stdlib `unittest`.

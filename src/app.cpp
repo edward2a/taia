@@ -97,12 +97,13 @@ void App::drain_events() {
   }
 }
 
-int App::run(std::string base_url, std::string api_key) {
+int App::run(std::string base_url, std::string api_key,
+             net::StreamTimeouts timeouts) {
   cpptui::Theme::set_theme(cpptui::Theme::TokyoNight());
   chat_ = std::make_unique<ui::ChatUi>(
       &tui_, [this](const ui::Action& action) { handle_action(action); });
-  controller_ = std::make_unique<SessionController>(std::move(base_url),
-                                                    std::move(api_key));
+  controller_ = std::make_unique<SessionController>(
+      std::move(base_url), std::move(api_key), timeouts);
 
   chat_->set_models({}, "");
   chat_->set_state(ui::RunState::Loading);

@@ -5,8 +5,9 @@
 
 namespace taia {
 
-SessionController::SessionController(std::string base_url, std::string api_key)
-    : client_(std::move(base_url), std::move(api_key)) {}
+SessionController::SessionController(std::string base_url, std::string api_key,
+                                     net::StreamTimeouts timeouts)
+    : client_(std::move(base_url), std::move(api_key), timeouts) {}
 
 SessionController::~SessionController() { stop(); }
 

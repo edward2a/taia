@@ -31,7 +31,8 @@ struct ControllerEvent {
 
 class SessionController {
  public:
-  explicit SessionController(std::string base_url, std::string api_key = {});
+  explicit SessionController(std::string base_url, std::string api_key = {},
+                             net::StreamTimeouts timeouts = {});
   ~SessionController();
 
   SessionController(const SessionController&) = delete;

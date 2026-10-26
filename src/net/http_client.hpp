@@ -1,10 +1,16 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <string>
 
 namespace taia::net {
+
+struct StreamTimeouts {
+  std::chrono::seconds start{300};
+  std::chrono::seconds idle{30};
+};
 
 struct HttpResponse {
   int status = 0;
@@ -20,7 +26,8 @@ struct SseEvent {
 
 class HttpClient {
  public:
-  explicit HttpClient(std::string base_url, std::string api_key = {});
+  explicit HttpClient(std::string base_url, std::string api_key = {},
+                      StreamTimeouts timeouts = {});
 
   const std::string& base_url() const { return base_url_; }
 
@@ -37,6 +44,7 @@ class HttpClient {
  private:
   std::string base_url_;
   std::string api_key_;
+  StreamTimeouts timeouts_;
 };
 
 }

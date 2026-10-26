@@ -218,6 +218,10 @@ class Connection {
   const std::string& decoded() const { return decoded_; }
   void consume(std::size_t count) { decoded_.erase(0, count); }
   void set_cancel(const std::atomic<bool>* cancel) { cancel_ = cancel; }
+  void set_timeout(std::chrono::seconds timeout) {
+    timeout_ = timeout;
+    deadline_ = std::chrono::steady_clock::now() + timeout_;
+  }
 
  private:
   bool fill_raw(std::string& error);
@@ -236,6 +240,7 @@ class Connection {
   long long chunk_remaining_ = 0;
   bool chunk_need_terminator_ = false;
   const std::atomic<bool>* cancel_ = nullptr;
+  std::chrono::seconds timeout_{30};
   std::chrono::steady_clock::time_point deadline_ =
       std::chrono::steady_clock::now();
 };
@@ -395,7 +400,7 @@ bool Connection::fill_raw(std::string& error) {
     const ssize_t n = ::recv(fd_, buffer, sizeof(buffer), 0);
     if (n > 0) {
       raw_.append(buffer, static_cast<std::size_t>(n));
-      deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+      deadline_ = std::chrono::steady_clock::now() + timeout_;
       return true;
     }
     if (n == 0) {
@@ -574,8 +579,11 @@ bool send_request(Connection& conn, const std::string& method,
 
 }  // namespace
 
-HttpClient::HttpClient(std::string base_url, std::string api_key)
-    : base_url_(std::move(base_url)), api_key_(std::move(api_key)) {}
+HttpClient::HttpClient(std::string base_url, std::string api_key,
+                       StreamTimeouts timeouts)
+    : base_url_(std::move(base_url)),
+      api_key_(std::move(api_key)),
+      timeouts_(timeouts) {}
 
 HttpResponse HttpClient::request(const std::string& method,
                                  const std::string& path,
@@ -620,9 +628,11 @@ bool HttpClient::stream(const std::string& method, const std::string& path,
     return false;
   }
 
+  conn.set_timeout(timeouts_.start);
   int status = 0;
   if (!conn.read_headers(status, error)) return false;
   if (status < 200 || status >= 300) {
+    conn.set_timeout(timeouts_.idle);
     while (true) {
       const Connection::Pump pump = conn.pump(error);
       if (pump == Connection::Pump::Data) continue;
@@ -634,6 +644,7 @@ bool HttpClient::stream(const std::string& method, const std::string& path,
     return false;
   }
 
+  bool first_event = true;
   while (true) {
     if (cancel != nullptr && cancel->load()) {
       error = "cancelled";
@@ -649,6 +660,10 @@ bool HttpClient::stream(const std::string& method, const std::string& path,
         std::string data = line.substr(5);
         if (!data.empty() && data.front() == ' ') data.erase(0, 1);
         if (!on_event(SseEvent{data})) return true;
+        if (first_event) {
+          conn.set_timeout(timeouts_.idle);
+          first_event = false;
+        }
       }
     }
     const Connection::Pump pump = conn.pump(error);

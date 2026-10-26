@@ -50,8 +50,9 @@ bool success_response(const std::string& body, const std::string& action,
 
 }  // namespace
 
-LlamaClient::LlamaClient(std::string base_url, std::string api_key)
-    : http_(std::move(base_url), std::move(api_key)) {}
+LlamaClient::LlamaClient(std::string base_url, std::string api_key,
+                         net::StreamTimeouts timeouts)
+    : http_(std::move(base_url), std::move(api_key), timeouts) {}
 
 bool LlamaClient::list_models(std::vector<ModelInfo>& models,
                               std::string& error,

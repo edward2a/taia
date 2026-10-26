@@ -34,11 +34,12 @@ void check(bool condition, const std::string& what) {
 
 class FakeServer {
  public:
-  explicit FakeServer(std::string response)
-      : FakeServer(std::vector<std::string>{std::move(response)}) {}
+  explicit FakeServer(std::string response, bool hold_open = false)
+      : FakeServer(std::vector<std::string>{std::move(response)}, hold_open) {}
 
-  explicit FakeServer(std::vector<std::string> responses)
-      : responses_(std::move(responses)) {
+  explicit FakeServer(std::vector<std::string> responses,
+                      bool hold_open = false)
+      : responses_(std::move(responses)), hold_open_(hold_open) {
     fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     int yes = 1;
     ::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
@@ -98,9 +99,15 @@ class FakeServer {
         if (n <= 0) break;
         sent += static_cast<std::size_t>(n);
       }
-      ::shutdown(client, SHUT_WR);
-      char sink[1024];
-      while (::recv(client, sink, sizeof(sink), 0) > 0) {
+      if (hold_open_) {
+        while (!released_) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+      } else {
+        ::shutdown(client, SHUT_WR);
+        char sink[1024];
+        while (::recv(client, sink, sizeof(sink), 0) > 0) {
+        }
       }
       ::close(client);
     }
@@ -137,6 +144,7 @@ class FakeServer {
   int port_ = 0;
   std::vector<std::string> responses_;
   std::string request_;
+  bool hold_open_ = false;
   std::atomic<bool> released_{false};
   std::atomic<bool> accepted_{false};
   std::thread thread_;
@@ -168,6 +176,17 @@ std::string chunked_response(const std::string& content_type,
 
 std::string sse(const std::string& payload) {
   return "data: " + payload + "\n\n";
+}
+
+std::string partial_chunked_sse(const std::string& payload) {
+  const std::string data = sse(payload);
+  std::ostringstream size;
+  size << std::hex << data.size();
+  std::string out =
+      "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+      "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+  out += size.str() + "\r\n" + data + "\r\n";
+  return out;
 }
 
 }
@@ -397,6 +416,38 @@ void test_cancel_before_request() {
   check(error == "cancelled", "pre-cancelled message: " + error);
 }
 
+void test_start_timeout_configurable() {
+  FakeServer server("");
+  LlamaClient llama(server.base_url(), "",
+                    {std::chrono::seconds(1), std::chrono::seconds(1)});
+  std::vector<taia::client::ChatMessage> messages;
+  const auto started = std::chrono::steady_clock::now();
+  std::string error;
+  check(!llama.chat_stream("mock/small", messages, nullptr, error),
+        "start timeout fails");
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  check(elapsed < std::chrono::seconds(10), "start timeout is honored");
+  check(error.find("timed out") != std::string::npos,
+        "start timeout message: " + error);
+}
+
+void test_idle_timeout_configurable() {
+  const std::string payload =
+      "{\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}";
+  FakeServer server(partial_chunked_sse(payload), true);
+  LlamaClient llama(server.base_url(), "",
+                    {std::chrono::seconds(5), std::chrono::seconds(1)});
+  std::vector<taia::client::ChatMessage> messages;
+  const auto started = std::chrono::steady_clock::now();
+  std::string error;
+  check(!llama.chat_stream("mock/small", messages, nullptr, error),
+        "idle timeout fails");
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  check(elapsed < std::chrono::seconds(10), "idle timeout is honored");
+  check(error.find("timed out") != std::string::npos,
+        "idle timeout message: " + error);
+}
+
 void test_controller_unload_polling() {
   const std::string loaded =
       "{\"object\":\"list\",\"data\":[{\"id\":\"m\","
@@ -471,6 +522,8 @@ int main() {
   test_truncated_chunk_trailer();
   test_malformed_chunk_trailer();
   test_cancel_before_request();
+  test_start_timeout_configurable();
+  test_idle_timeout_configurable();
   test_controller_unload_polling();
   test_controller_shutdown_stall();
   if (failures == 0) {

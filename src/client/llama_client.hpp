@@ -23,7 +23,8 @@ struct ChatMessage {
 
 class LlamaClient {
  public:
-  explicit LlamaClient(std::string base_url, std::string api_key = {});
+  explicit LlamaClient(std::string base_url, std::string api_key = {},
+                       net::StreamTimeouts timeouts = {});
 
   bool list_models(std::vector<ModelInfo>& models, std::string& error,
                    const std::atomic<bool>* cancel = nullptr);
