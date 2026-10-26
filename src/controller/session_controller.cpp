@@ -67,6 +67,13 @@ bool SessionController::poll_event(ControllerEvent& event) {
   return true;
 }
 
+bool SessionController::begin_request() {
+  std::lock_guard<std::mutex> lock(task_mutex_);
+  if (stopping_) return false;
+  cancel_ = false;
+  return true;
+}
+
 void SessionController::set_selected_model(const std::string& model) {
   selected_model_ = model;
 }
@@ -93,8 +100,7 @@ void SessionController::submit_prompt(const std::string& text) {
 void SessionController::cancel_stream() { cancel_ = true; }
 
 void SessionController::do_refresh_models() {
-  if (stopping_) return;
-  cancel_ = false;
+  if (!begin_request()) return;
   std::vector<client::ModelInfo> models;
   std::string error;
   if (!client_.list_models(models, error, &cancel_)) {
@@ -113,8 +119,7 @@ void SessionController::do_load_model(const std::string& model) {
     push_event({ControllerEvent::Type::Error, {}, "no model selected", false});
     return;
   }
-  if (stopping_) return;
-  cancel_ = false;
+  if (!begin_request()) return;
   std::string error;
   if (!client_.load_model(model, error, &cancel_)) {
     push_event({ControllerEvent::Type::Error, {}, error, false});
@@ -157,8 +162,7 @@ void SessionController::do_unload_model(const std::string& model) {
     push_event({ControllerEvent::Type::Error, {}, "no model selected", false});
     return;
   }
-  if (stopping_) return;
-  cancel_ = false;
+  if (!begin_request()) return;
   std::string error;
   if (!client_.unload_model(model, error, &cancel_)) {
     push_event({ControllerEvent::Type::Error, {}, error, false});
@@ -200,8 +204,7 @@ void SessionController::do_submit_prompt(const std::string& model,
     push_event({ControllerEvent::Type::Error, {}, "no model selected", false});
     return;
   }
-  if (stopping_) return;
-  cancel_ = false;
+  if (!begin_request()) return;
   history_.push_back({"user", text});
   std::string reply;
   std::string error;

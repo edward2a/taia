@@ -5,7 +5,9 @@
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <fcntl.h>
 #include <netdb.h>
+#include <poll.h>
 #include <string>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -128,11 +130,13 @@ Connection::~Connection() {
 }
 
 bool Connection::open(const ParsedUrl& url, std::string& error) {
+  deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
   addrinfo hints{};
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   addrinfo* result = nullptr;
-  const int rc = ::getaddrinfo(url.host.c_str(), url.port.c_str(), &hints, &result);
+  const int rc =
+      ::getaddrinfo(url.host.c_str(), url.port.c_str(), &hints, &result);
   if (rc != 0) {
     error = "cannot resolve " + url.host + ": " + ::gai_strerror(rc);
     return false;
@@ -140,23 +144,55 @@ bool Connection::open(const ParsedUrl& url, std::string& error) {
   for (addrinfo* it = result; it != nullptr; it = it->ai_next) {
     const int fd = ::socket(it->ai_family, it->ai_socktype, it->ai_protocol);
     if (fd < 0) continue;
-      timeval timeout{};
-      timeout.tv_sec = 0;
-      timeout.tv_usec = 200000;
+    timeval timeout{};
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 200000;
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
-    if (::connect(fd, it->ai_addr, it->ai_addrlen) == 0) {
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+    bool connected = false;
+    const int connect_rc = ::connect(fd, it->ai_addr, it->ai_addrlen);
+    if (connect_rc == 0) {
+      connected = true;
+    } else if (errno == EINPROGRESS) {
+      while (true) {
+        if (cancel_ != nullptr && cancel_->load()) {
+          error = "cancelled";
+          break;
+        }
+        pollfd descriptor{fd, POLLOUT, 0};
+        const int ready = ::poll(&descriptor, 1, 200);
+        if (ready > 0) {
+          int socket_error = 0;
+          socklen_t length = sizeof(socket_error);
+          ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &length);
+          if (socket_error == 0) connected = true;
+          break;
+        }
+        if (ready == 0) {
+          if (std::chrono::steady_clock::now() >= deadline_) break;
+          continue;
+        }
+        if (errno == EINTR) continue;
+        break;
+      }
+    }
+
+    if (connected) {
+      if (flags >= 0) ::fcntl(fd, F_SETFL, flags);
       fd_ = fd;
       break;
     }
     ::close(fd);
+    if (!error.empty()) break;
   }
   ::freeaddrinfo(result);
   if (fd_ < 0) {
-    error = "cannot connect to " + url.host + ":" + url.port;
+    if (error.empty()) error = "cannot connect to " + url.host + ":" + url.port;
     return false;
   }
-  deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
   return true;
 }
 
@@ -380,6 +416,10 @@ Connection::Pump Connection::pump_chunked(std::string& error) {
             return Pump::Error;
           }
           if (trailer.empty()) break;
+          if (trailer.find(':') == std::string::npos) {
+            error = "malformed chunked trailer";
+            return Pump::Error;
+          }
         }
         body_done_ = true;
         return Pump::End;
@@ -435,8 +475,8 @@ HttpResponse HttpClient::request(const std::string& method,
   if (!parse_url(base_url_, url, response.error)) return response;
 
   Connection conn;
-  if (!conn.open(url, response.error)) return response;
   conn.set_cancel(cancel);
+  if (!conn.open(url, response.error)) return response;
   if (!send_request(conn, method, url.prefix + path, url.host, body,
                     "application/json", api_key_, response.error)) {
     return response;
@@ -462,8 +502,8 @@ bool HttpClient::stream(const std::string& method, const std::string& path,
   if (!parse_url(base_url_, url, error)) return false;
 
   Connection conn;
-  if (!conn.open(url, error)) return false;
   conn.set_cancel(cancel);
+  if (!conn.open(url, error)) return false;
   if (!send_request(conn, method, url.prefix + path, url.host, body,
                     "text/event-stream", api_key_, error)) {
     return false;

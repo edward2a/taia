@@ -60,11 +60,16 @@ class FakeServer {
     if (fd_ >= 0) ::close(fd_);
   }
 
-  void release() { released_ = true; }
+  void release() {
+    released_ = true;
+    if (fd_ >= 0) ::shutdown(fd_, SHUT_RDWR);
+  }
 
   void wait() {
     if (thread_.joinable()) thread_.join();
   }
+
+  bool accepted() const { return accepted_.load(); }
 
   const std::string& request_headers() const { return request_; }
 
@@ -78,6 +83,7 @@ class FakeServer {
       const int client = ::accept(fd_, nullptr, nullptr);
       if (client < 0) return;
       read_request(client, request_);
+      accepted_ = true;
       if (response.empty()) {
         while (!released_) {
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -132,6 +138,7 @@ class FakeServer {
   std::vector<std::string> responses_;
   std::string request_;
   std::atomic<bool> released_{false};
+  std::atomic<bool> accepted_{false};
   std::thread thread_;
 };
 
@@ -406,7 +413,13 @@ void test_controller_shutdown_stall() {
   controller.start();
   controller.set_selected_model("m");
   controller.submit_prompt("hi");
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  const auto accept_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  while (!server.accepted() &&
+         std::chrono::steady_clock::now() < accept_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  check(server.accepted(), "server accepted the stalled request");
 
   const auto begin = std::chrono::steady_clock::now();
   controller.stop();

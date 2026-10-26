@@ -55,6 +55,7 @@ class SessionController {
   void enqueue(std::function<void()> task);
   void worker_loop();
   void push_event(ControllerEvent event);
+  bool begin_request();
 
   void do_refresh_models();
   void do_load_model(const std::string& model);
