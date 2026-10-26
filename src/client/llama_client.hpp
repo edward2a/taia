@@ -25,9 +25,12 @@ class LlamaClient {
  public:
   explicit LlamaClient(std::string base_url, std::string api_key = {});
 
-  bool list_models(std::vector<ModelInfo>& models, std::string& error);
-  bool load_model(const std::string& model, std::string& error);
-  bool unload_model(const std::string& model, std::string& error);
+  bool list_models(std::vector<ModelInfo>& models, std::string& error,
+                   const std::atomic<bool>* cancel = nullptr);
+  bool load_model(const std::string& model, std::string& error,
+                  const std::atomic<bool>* cancel = nullptr);
+  bool unload_model(const std::string& model, std::string& error,
+                    const std::atomic<bool>* cancel = nullptr);
   bool chat_stream(const std::string& model,
                    const std::vector<ChatMessage>& messages,
                    const std::function<void(const std::string&)>& on_delta,

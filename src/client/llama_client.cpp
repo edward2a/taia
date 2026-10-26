@@ -54,8 +54,9 @@ LlamaClient::LlamaClient(std::string base_url, std::string api_key)
     : http_(std::move(base_url), std::move(api_key)) {}
 
 bool LlamaClient::list_models(std::vector<ModelInfo>& models,
-                              std::string& error) {
-  const net::HttpResponse response = http_.request("GET", "/models", "");
+                              std::string& error,
+                              const std::atomic<bool>* cancel) {
+  const net::HttpResponse response = http_.request("GET", "/models", "", cancel);
   if (!response.error.empty()) {
     error = response.error;
     return false;
@@ -100,10 +101,11 @@ bool LlamaClient::list_models(std::vector<ModelInfo>& models,
   return true;
 }
 
-bool LlamaClient::load_model(const std::string& model, std::string& error) {
+bool LlamaClient::load_model(const std::string& model, std::string& error,
+                             const std::atomic<bool>* cancel) {
   const json request{{"model", model}};
   const net::HttpResponse response =
-      http_.request("POST", "/models/load", request.dump());
+      http_.request("POST", "/models/load", request.dump(), cancel);
   if (!response.error.empty()) {
     error = response.error;
     return false;
@@ -115,10 +117,11 @@ bool LlamaClient::load_model(const std::string& model, std::string& error) {
   return success_response(response.body, "load", error);
 }
 
-bool LlamaClient::unload_model(const std::string& model, std::string& error) {
+bool LlamaClient::unload_model(const std::string& model, std::string& error,
+                               const std::atomic<bool>* cancel) {
   const json request{{"model", model}};
   const net::HttpResponse response =
-      http_.request("POST", "/models/unload", request.dump());
+      http_.request("POST", "/models/unload", request.dump(), cancel);
   if (!response.error.empty()) {
     error = response.error;
     return false;

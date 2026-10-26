@@ -5,6 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+find_package(Threads REQUIRED)
+
 if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
   set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 endif()
@@ -36,7 +38,8 @@ add_executable(taia_ct
   src/ui/prompt_input.cpp
 )
 target_include_directories(taia_ct PRIVATE src)
-target_link_libraries(taia_ct PRIVATE cpptui::cpptui nlohmann_json::nlohmann_json)
+target_link_libraries(taia_ct PRIVATE cpptui::cpptui nlohmann_json::nlohmann_json
+                      Threads::Threads)
 
 enable_testing()
 
@@ -44,7 +47,9 @@ add_executable(taia_client_test
   tests/cpp/test_client.cpp
   src/net/http_client.cpp
   src/client/llama_client.cpp
+  src/controller/session_controller.cpp
 )
 target_include_directories(taia_client_test PRIVATE src)
-target_link_libraries(taia_client_test PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(taia_client_test PRIVATE nlohmann_json::nlohmann_json
+                      Threads::Threads)
 add_test(NAME taia_client_test COMMAND taia_client_test)

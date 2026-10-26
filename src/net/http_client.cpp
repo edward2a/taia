@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <netdb.h>
 #include <string>
@@ -99,6 +100,7 @@ class Connection {
 
   const std::string& decoded() const { return decoded_; }
   void consume(std::size_t count) { decoded_.erase(0, count); }
+  void set_cancel(const std::atomic<bool>* cancel) { cancel_ = cancel; }
 
  private:
   bool fill_raw(std::string& error);
@@ -116,6 +118,9 @@ class Connection {
   long long content_read_ = 0;
   long long chunk_remaining_ = 0;
   bool chunk_need_terminator_ = false;
+  const std::atomic<bool>* cancel_ = nullptr;
+  std::chrono::steady_clock::time_point deadline_ =
+      std::chrono::steady_clock::now();
 };
 
 Connection::~Connection() {
@@ -135,8 +140,9 @@ bool Connection::open(const ParsedUrl& url, std::string& error) {
   for (addrinfo* it = result; it != nullptr; it = it->ai_next) {
     const int fd = ::socket(it->ai_family, it->ai_socktype, it->ai_protocol);
     if (fd < 0) continue;
-    timeval timeout{};
-    timeout.tv_sec = 30;
+      timeval timeout{};
+      timeout.tv_sec = 0;
+      timeout.tv_usec = 200000;
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
     if (::connect(fd, it->ai_addr, it->ai_addrlen) == 0) {
@@ -150,6 +156,7 @@ bool Connection::open(const ParsedUrl& url, std::string& error) {
     error = "cannot connect to " + url.host + ":" + url.port;
     return false;
   }
+  deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
   return true;
 }
 
@@ -235,9 +242,15 @@ bool Connection::fill_raw(std::string& error) {
   if (eof_) return false;
   char buffer[8192];
   while (true) {
+    if (cancel_ != nullptr && cancel_->load()) {
+      eof_ = true;
+      error = "cancelled";
+      return false;
+    }
     const ssize_t n = ::recv(fd_, buffer, sizeof(buffer), 0);
     if (n > 0) {
       raw_.append(buffer, static_cast<std::size_t>(n));
+      deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
       return true;
     }
     if (n == 0) {
@@ -245,12 +258,16 @@ bool Connection::fill_raw(std::string& error) {
       return false;
     }
     if (errno == EINTR) continue;
-    eof_ = true;
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      error = "timed out waiting for the server";
-    } else {
-      error = std::string("recv failed: ") + std::strerror(errno);
+      if (std::chrono::steady_clock::now() >= deadline_) {
+        eof_ = true;
+        error = "timed out waiting for the server";
+        return false;
+      }
+      continue;
     }
+    eof_ = true;
+    error = std::string("recv failed: ") + std::strerror(errno);
     return false;
   }
 }
@@ -357,7 +374,11 @@ Connection::Pump Connection::pump_chunked(std::string& error) {
         while (true) {
           std::string trailer;
           bool trailer_eof = false;
-          if (!read_raw_line(trailer, trailer_eof, error)) break;
+          if (!read_raw_line(trailer, trailer_eof, error)) {
+            if (!error.empty()) return Pump::Error;
+            error = "truncated chunked body";
+            return Pump::Error;
+          }
           if (trailer.empty()) break;
         }
         body_done_ = true;
@@ -407,13 +428,15 @@ HttpClient::HttpClient(std::string base_url, std::string api_key)
 
 HttpResponse HttpClient::request(const std::string& method,
                                  const std::string& path,
-                                 const std::string& body) {
+                                 const std::string& body,
+                                 const std::atomic<bool>* cancel) {
   HttpResponse response;
   ParsedUrl url;
   if (!parse_url(base_url_, url, response.error)) return response;
 
   Connection conn;
   if (!conn.open(url, response.error)) return response;
+  conn.set_cancel(cancel);
   if (!send_request(conn, method, url.prefix + path, url.host, body,
                     "application/json", api_key_, response.error)) {
     return response;
@@ -440,6 +463,7 @@ bool HttpClient::stream(const std::string& method, const std::string& path,
 
   Connection conn;
   if (!conn.open(url, error)) return false;
+  conn.set_cancel(cancel);
   if (!send_request(conn, method, url.prefix + path, url.host, body,
                     "text/event-stream", api_key_, error)) {
     return false;

@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <arpa/inet.h>
+#include <atomic>
 #include <cctype>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <netinet/in.h>
@@ -12,9 +14,12 @@
 #include <vector>
 
 #include "client/llama_client.hpp"
+#include "controller/session_controller.hpp"
 
 namespace {
 
+using taia::ControllerEvent;
+using taia::SessionController;
 using taia::client::LlamaClient;
 using taia::client::ModelInfo;
 
@@ -29,7 +34,11 @@ void check(bool condition, const std::string& what) {
 
 class FakeServer {
  public:
-  explicit FakeServer(std::string response) : response_(std::move(response)) {
+  explicit FakeServer(std::string response)
+      : FakeServer(std::vector<std::string>{std::move(response)}) {}
+
+  explicit FakeServer(std::vector<std::string> responses)
+      : responses_(std::move(responses)) {
     fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
     int yes = 1;
     ::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
@@ -46,9 +55,12 @@ class FakeServer {
   }
 
   ~FakeServer() {
+    release();
     wait();
     if (fd_ >= 0) ::close(fd_);
   }
+
+  void release() { released_ = true; }
 
   void wait() {
     if (thread_.joinable()) thread_.join();
@@ -62,21 +74,30 @@ class FakeServer {
 
  private:
   void serve() {
-    const int client = ::accept(fd_, nullptr, nullptr);
-    if (client < 0) return;
-    read_request(client, request_);
-    std::size_t sent = 0;
-    while (sent < response_.size()) {
-      const ssize_t n = ::send(client, response_.data() + sent,
-                               response_.size() - sent, MSG_NOSIGNAL);
-      if (n <= 0) break;
-      sent += static_cast<std::size_t>(n);
+    for (const std::string& response : responses_) {
+      const int client = ::accept(fd_, nullptr, nullptr);
+      if (client < 0) return;
+      read_request(client, request_);
+      if (response.empty()) {
+        while (!released_) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        ::close(client);
+        continue;
+      }
+      std::size_t sent = 0;
+      while (sent < response.size()) {
+        const ssize_t n = ::send(client, response.data() + sent,
+                                 response.size() - sent, MSG_NOSIGNAL);
+        if (n <= 0) break;
+        sent += static_cast<std::size_t>(n);
+      }
+      ::shutdown(client, SHUT_WR);
+      char sink[1024];
+      while (::recv(client, sink, sizeof(sink), 0) > 0) {
+      }
+      ::close(client);
     }
-    ::shutdown(client, SHUT_WR);
-    char sink[1024];
-    while (::recv(client, sink, sizeof(sink), 0) > 0) {
-    }
-    ::close(client);
   }
 
   static void read_request(int client, std::string& data) {
@@ -108,8 +129,9 @@ class FakeServer {
 
   int fd_ = -1;
   int port_ = 0;
-  std::string response_;
+  std::vector<std::string> responses_;
   std::string request_;
+  std::atomic<bool> released_{false};
   std::thread thread_;
 };
 
@@ -330,6 +352,71 @@ void test_load_unexpected_body() {
         "unexpected load message: " + error);
 }
 
+void test_truncated_chunk_trailer() {
+  const std::string raw =
+      "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+      "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+      "2\r\n{}\r\n0\r\n";
+  FakeServer server(raw);
+  LlamaClient llama(server.base_url());
+  std::vector<ModelInfo> models;
+  std::string error;
+  check(!llama.list_models(models, error), "truncated trailer fails");
+  check(error.find("truncated") != std::string::npos,
+        "truncated trailer message: " + error);
+}
+
+void test_controller_unload_polling() {
+  const std::string loaded =
+      "{\"object\":\"list\",\"data\":[{\"id\":\"m\","
+      "\"status\":{\"value\":\"loaded\"}}]}";
+  const std::string unloaded =
+      "{\"object\":\"list\",\"data\":[{\"id\":\"m\","
+      "\"status\":{\"value\":\"unloaded\"}}]}";
+  FakeServer server(
+      {http_response(200, "application/json", "{\"success\":true}"),
+       http_response(200, "application/json", loaded),
+       http_response(200, "application/json", unloaded)});
+  SessionController controller(server.base_url());
+  controller.start();
+  controller.set_selected_model("m");
+  controller.unload_model();
+
+  bool finished = false;
+  bool errored = false;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (std::chrono::steady_clock::now() < deadline && !finished &&
+         !errored) {
+    ControllerEvent event;
+    while (controller.poll_event(event)) {
+      if (event.type == ControllerEvent::Type::UnloadFinished) finished = true;
+      if (event.type == ControllerEvent::Type::Error) errored = true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  controller.stop();
+  check(finished, "controller unload finishes after polling");
+  check(!errored, "controller unload reports no error");
+}
+
+void test_controller_shutdown_stall() {
+  FakeServer server(std::vector<std::string>{std::string()});
+  SessionController controller(server.base_url());
+  controller.start();
+  controller.set_selected_model("m");
+  controller.submit_prompt("hi");
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  const auto begin = std::chrono::steady_clock::now();
+  controller.stop();
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - begin);
+  server.release();
+  check(elapsed < std::chrono::milliseconds(2000),
+        "shutdown cancels a stalled request");
+}
+
 int main() {
   test_list_models();
   test_chunked_list_models();
@@ -344,6 +431,9 @@ int main() {
   test_stream_without_done();
   test_api_key();
   test_load_unexpected_body();
+  test_truncated_chunk_trailer();
+  test_controller_unload_polling();
+  test_controller_shutdown_stall();
   if (failures == 0) {
     std::cout << "all client tests passed\n";
     return 0;

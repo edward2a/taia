@@ -25,7 +25,8 @@ class HttpClient {
   const std::string& base_url() const { return base_url_; }
 
   HttpResponse request(const std::string& method, const std::string& path,
-                       const std::string& body);
+                       const std::string& body,
+                       const std::atomic<bool>* cancel = nullptr);
 
   bool stream(const std::string& method, const std::string& path,
               const std::string& body,

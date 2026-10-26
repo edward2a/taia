@@ -93,9 +93,11 @@ void SessionController::submit_prompt(const std::string& text) {
 void SessionController::cancel_stream() { cancel_ = true; }
 
 void SessionController::do_refresh_models() {
+  if (stopping_) return;
+  cancel_ = false;
   std::vector<client::ModelInfo> models;
   std::string error;
-  if (!client_.list_models(models, error)) {
+  if (!client_.list_models(models, error, &cancel_)) {
     push_event({ControllerEvent::Type::Error, {}, error, false});
     return;
   }
@@ -111,8 +113,10 @@ void SessionController::do_load_model(const std::string& model) {
     push_event({ControllerEvent::Type::Error, {}, "no model selected", false});
     return;
   }
+  if (stopping_) return;
+  cancel_ = false;
   std::string error;
-  if (!client_.load_model(model, error)) {
+  if (!client_.load_model(model, error, &cancel_)) {
     push_event({ControllerEvent::Type::Error, {}, error, false});
     return;
   }
@@ -121,7 +125,7 @@ void SessionController::do_load_model(const std::string& model) {
   while (!stopping_ && std::chrono::steady_clock::now() < deadline) {
     std::vector<client::ModelInfo> models;
     std::string list_error;
-    if (!client_.list_models(models, list_error)) {
+    if (!client_.list_models(models, list_error, &cancel_)) {
       push_event({ControllerEvent::Type::Error, {}, list_error, false});
       return;
     }
@@ -153,8 +157,10 @@ void SessionController::do_unload_model(const std::string& model) {
     push_event({ControllerEvent::Type::Error, {}, "no model selected", false});
     return;
   }
+  if (stopping_) return;
+  cancel_ = false;
   std::string error;
-  if (!client_.unload_model(model, error)) {
+  if (!client_.unload_model(model, error, &cancel_)) {
     push_event({ControllerEvent::Type::Error, {}, error, false});
     return;
   }
@@ -163,7 +169,7 @@ void SessionController::do_unload_model(const std::string& model) {
   while (!stopping_ && std::chrono::steady_clock::now() < deadline) {
     std::vector<client::ModelInfo> models;
     std::string list_error;
-    if (!client_.list_models(models, list_error)) {
+    if (!client_.list_models(models, list_error, &cancel_)) {
       push_event({ControllerEvent::Type::Error, {}, list_error, false});
       return;
     }
