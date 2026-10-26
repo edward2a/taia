@@ -373,6 +373,20 @@ void test_truncated_chunk_trailer() {
         "truncated trailer message: " + error);
 }
 
+void test_malformed_chunk_trailer() {
+  const std::string raw =
+      "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+      "Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+      "2\r\n{}\r\n0\r\n: nope\r\n\r\n";
+  FakeServer server(raw);
+  LlamaClient llama(server.base_url());
+  std::vector<ModelInfo> models;
+  std::string error;
+  check(!llama.list_models(models, error), "malformed trailer fails");
+  check(error.find("malformed") != std::string::npos,
+        "malformed trailer message: " + error);
+}
+
 void test_controller_unload_polling() {
   const std::string loaded =
       "{\"object\":\"list\",\"data\":[{\"id\":\"m\","
@@ -445,6 +459,7 @@ int main() {
   test_api_key();
   test_load_unexpected_body();
   test_truncated_chunk_trailer();
+  test_malformed_chunk_trailer();
   test_controller_unload_polling();
   test_controller_shutdown_stall();
   if (failures == 0) {

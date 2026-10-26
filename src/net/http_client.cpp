@@ -4,13 +4,17 @@
 #include <cctype>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <fcntl.h>
+#include <memory>
+#include <mutex>
 #include <netdb.h>
 #include <poll.h>
 #include <string>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <thread>
 #include <unistd.h>
 #include <utility>
 
@@ -86,6 +90,71 @@ std::string trim(const std::string& value) {
   return value.substr(begin, end - begin + 1);
 }
 
+bool is_token(const std::string& name) {
+  if (name.empty()) return false;
+  static const std::string allowed = "!#$%&'*+-.^_`|~";
+  for (const unsigned char c : name) {
+    if (std::isalnum(c)) continue;
+    if (allowed.find(static_cast<char>(c)) != std::string::npos) continue;
+    return false;
+  }
+  return true;
+}
+
+struct ResolveState {
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool done = false;
+  bool abandoned = false;
+  int rc = 0;
+  addrinfo* info = nullptr;
+};
+
+bool resolve_address(const std::string& host, const std::string& port,
+                     const std::atomic<bool>* cancel,
+                     std::chrono::steady_clock::time_point deadline,
+                     addrinfo*& out, std::string& error) {
+  auto state = std::make_shared<ResolveState>();
+  std::thread worker([state, host, port] {
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* info = nullptr;
+    const int rc = ::getaddrinfo(host.c_str(), port.c_str(), &hints, &info);
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->rc = rc;
+    if (state->abandoned) {
+      if (info != nullptr) ::freeaddrinfo(info);
+    } else {
+      state->info = info;
+      state->done = true;
+    }
+    state->cv.notify_all();
+  });
+  worker.detach();
+
+  std::unique_lock<std::mutex> lock(state->mutex);
+  while (!state->done) {
+    if (cancel != nullptr && cancel->load()) {
+      state->abandoned = true;
+      error = "cancelled";
+      return false;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      state->abandoned = true;
+      error = "timed out resolving " + host;
+      return false;
+    }
+    state->cv.wait_for(lock, std::chrono::milliseconds(100));
+  }
+  if (state->rc != 0) {
+    error = "cannot resolve " + host + ": " + ::gai_strerror(state->rc);
+    return false;
+  }
+  out = state->info;
+  return true;
+}
+
 class Connection {
  public:
   Connection() = default;
@@ -131,14 +200,8 @@ Connection::~Connection() {
 
 bool Connection::open(const ParsedUrl& url, std::string& error) {
   deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-  addrinfo hints{};
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
   addrinfo* result = nullptr;
-  const int rc =
-      ::getaddrinfo(url.host.c_str(), url.port.c_str(), &hints, &result);
-  if (rc != 0) {
-    error = "cannot resolve " + url.host + ": " + ::gai_strerror(rc);
+  if (!resolve_address(url.host, url.port, cancel_, deadline_, result, error)) {
     return false;
   }
   for (addrinfo* it = result; it != nullptr; it = it->ai_next) {
@@ -416,7 +479,9 @@ Connection::Pump Connection::pump_chunked(std::string& error) {
             return Pump::Error;
           }
           if (trailer.empty()) break;
-          if (trailer.find(':') == std::string::npos) {
+          const auto colon = trailer.find(':');
+          if (colon == std::string::npos ||
+              !is_token(trailer.substr(0, colon))) {
             error = "malformed chunked trailer";
             return Pump::Error;
           }
