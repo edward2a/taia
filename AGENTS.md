@@ -8,7 +8,9 @@
 ## Build and run
 
 - Configure: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug`
-- Build: `cmake --build build -j`
+- Build: `cmake --build build -j` or `make`
+- Tests: `ctest --test-dir build --output-on-failure` or `make test`
+- Remove the build directory: `make clean`
 - Run: `./build/taia_ct http://127.0.0.1:9931` (or set `TAIA_SERVER_URL`).
 - Workspace: `TAIA_WORKSPACE` sets the agent workspace root (default: current directory).
 - API key: set `TAIA_API_KEY` when the server requires `Authorization: Bearer`.
@@ -20,7 +22,6 @@
   `/bin/bash -lc` in the workspace under the application user's permissions, so
   approval is not a sandbox. The server must support OpenAI-style tool calls
   (`--jinja` with a compatible template).
-- C++ tests: `ctest --test-dir build --output-on-failure`
 
 Python tests use the stdlib `unittest`.
 

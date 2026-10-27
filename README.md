@@ -22,6 +22,15 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j
 ```
 
+Or use the Makefile wrappers:
+
+```sh
+make            # configure and build
+make test       # build and run CTest
+make python-test
+make clean      # remove the build directory
+```
+
 ## Run
 
 Start the mock for local development:
