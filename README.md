@@ -45,16 +45,41 @@ Then run the app:
 ./build/taia_ct http://127.0.0.1:9931
 ```
 
-The server URL can also come from `TAIA_SERVER_URL`; a positional argument wins.
 The app connects to an already-running server and does not start or manage
 llama-server.
 
+### Command line
+
+```text
+taia_ct [OPTIONS] [SERVER_URL]
+```
+
+| Option | Purpose |
+| --- | --- |
+| `-h`, `--help` | Print usage and exit without starting the TUI. |
+| `-u`, `--server-url URL` | Server base URL. |
+| `-w`, `--workspace PATH` | Workspace root for tools and commands. |
+| `--stream-start-timeout-seconds N` | First-token timeout, 1-86400 seconds. |
+| `--stream-idle-timeout-seconds N` | Inter-chunk timeout, 1-86400 seconds. |
+| `--prompt-api-key` | Read the API key from hidden terminal input before startup. |
+
+The positional `SERVER_URL` is equivalent to `--server-url`; supplying both is
+an error. Settings resolve in this order: command line, environment, built-in
+defaults.
+
+Without `--prompt-api-key`, the API key comes from `TAIA_API_KEY`. With the flag,
+the app prompts on stdin before the TUI starts, does not echo the key, and uses
+the entered value instead of the environment. The prompt requires stdin to be a
+terminal.
+
 ### Environment
+
+Command-line options take precedence over these variables.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `TAIA_SERVER_URL` | `http://127.0.0.1:9931` | Server base URL (HTTP only). |
-| `TAIA_API_KEY` | unset | Sent as `Authorization: Bearer` when set. It is removed from agent command environments. |
+| `TAIA_API_KEY` | unset | Sent as `Authorization: Bearer` when set and `--prompt-api-key` is absent. It is removed from agent command environments. |
 | `TAIA_WORKSPACE` | current directory | Workspace root for tools and agent commands. |
 | `TAIA_STREAM_START_TIMEOUT_SECONDS` | `300` | Time allowed before the first streamed token (cold prefill). |
 | `TAIA_STREAM_IDLE_TIMEOUT_SECONDS` | `30` | Time allowed between streamed chunks. |

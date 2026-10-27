@@ -30,6 +30,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 add_executable(taia_ct
   src/main.cpp
   src/app.cpp
+  src/cli_options.cpp
   src/client/llama_client.cpp
   src/controller/session_controller.cpp
   src/net/http_client.cpp
@@ -65,3 +66,10 @@ target_include_directories(taia_tools_test PRIVATE src)
 target_link_libraries(taia_tools_test PRIVATE nlohmann_json::nlohmann_json
                       Threads::Threads)
 add_test(NAME taia_tools_test COMMAND taia_tools_test)
+
+add_executable(taia_cli_test
+  tests/cpp/test_cli_options.cpp
+  src/cli_options.cpp
+)
+target_include_directories(taia_cli_test PRIVATE src)
+add_test(NAME taia_cli_test COMMAND taia_cli_test)
