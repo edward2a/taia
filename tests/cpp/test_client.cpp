@@ -93,6 +93,7 @@ class FakeServer {
     for (const std::string& response : responses_) {
       const int client = ::accept(fd_, nullptr, nullptr);
       if (client < 0) return;
+      request_.clear();
       read_request(client, request_);
       accepted_ = true;
       if (response.empty()) {
@@ -182,6 +183,12 @@ std::string chunked_response(const std::string& content_type,
   }
   out += "0\r\n\r\n";
   return out;
+}
+
+std::string open_sse_response(const std::string& body) {
+  return "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+         "Connection: close\r\n\r\n" +
+         body;
 }
 
 std::string sse(const std::string& payload) {
@@ -332,6 +339,18 @@ void test_stream_incomplete() {
   check(!ok, "incomplete stream fails");
   check(error.find("done sentinel") != std::string::npos,
         "incomplete stream message: " + error);
+}
+
+void test_malformed_sse_event() {
+  FakeServer server(http_response(200, "text/event-stream",
+                                  sse("{not json") + sse("[DONE]")));
+  LlamaClient llama(server.base_url());
+  std::string error;
+  const bool ok = llama.chat_stream(
+      "mock/small", {{"user", "hi"}}, [](const std::string&) {}, error);
+  check(!ok, "malformed stream event fails");
+  check(error.find("invalid stream event") != std::string::npos,
+        "malformed stream message: " + error);
 }
 
 void test_invalid_models_json() {
@@ -851,6 +870,178 @@ void test_controller_approval() {
   run_case(false);
 }
 
+void test_controller_cancel_mid_stream() {
+  const std::string body = sse_chunk({{"content", "one"}}, nullptr);
+  FakeServer server(open_sse_response(body), true);
+  SessionController controller(server.base_url());
+  controller.start();
+  controller.set_selected_model("m");
+  controller.submit_prompt("hi");
+
+  bool delta = false;
+  bool cancel_requested = false;
+  bool stream_done = false;
+  bool errored = false;
+  std::string error;
+  auto cancelled_at = std::chrono::steady_clock::now();
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < deadline && !stream_done &&
+         !errored) {
+    ControllerEvent event;
+    while (controller.poll_event(event)) {
+      if (event.type == ControllerEvent::Type::Delta) {
+        delta = true;
+        if (!cancel_requested) {
+          cancel_requested = true;
+          cancelled_at = std::chrono::steady_clock::now();
+          controller.cancel_stream();
+        }
+      }
+      if (event.type == ControllerEvent::Type::StreamDone) stream_done = true;
+      if (event.type == ControllerEvent::Type::Error) {
+        errored = true;
+        error = event.text;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - cancelled_at);
+  controller.stop();
+  server.release();
+
+  check(delta, "mid-stream delta observed before cancel");
+  check(cancel_requested, "cancel was requested");
+  check(stream_done, "cancel finishes the turn");
+  check(!errored, "cancel is not reported as an error: " + error);
+  check(elapsed < std::chrono::milliseconds(2000),
+        "cancel stops the stream promptly");
+}
+
+void test_controller_error_drops_turn() {
+  FakeServer server(
+      {http_response(500, "application/json", "{\"error\":\"boom\"}"),
+       http_response(200, "text/event-stream", text_body("ok"))});
+  SessionController controller(server.base_url());
+  controller.start();
+  controller.set_selected_model("m");
+  controller.submit_prompt("alpha_prompt_123");
+
+  bool errored = false;
+  std::string error;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (std::chrono::steady_clock::now() < deadline && !errored) {
+    ControllerEvent event;
+    while (controller.poll_event(event)) {
+      if (event.type == ControllerEvent::Type::Error) {
+        errored = true;
+        error = event.text;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  check(errored, "server error is reported");
+  check(error.find("boom") != std::string::npos,
+        "server error message: " + error);
+
+  bool done = false;
+  controller.submit_prompt("beta_prompt_456");
+  const auto second_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (std::chrono::steady_clock::now() < second_deadline && !done) {
+    ControllerEvent event;
+    while (controller.poll_event(event)) {
+      if (event.type == ControllerEvent::Type::StreamDone ||
+          event.type == ControllerEvent::Type::Error) {
+        done = true;
+        if (event.type == ControllerEvent::Type::Error) error = event.text;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  controller.stop();
+  const std::string& request = server.request_headers();
+  check(done, "second turn finishes");
+  check(request.find("alpha_prompt_123") == std::string::npos,
+        "failed prompt is dropped from history");
+  check(request.find("beta_prompt_456") != std::string::npos,
+        "second prompt is sent");
+}
+
+void test_controller_load_failure() {
+  FakeServer server(
+      http_response(500, "application/json", "{\"error\":\"load failed\"}"));
+  SessionController controller(server.base_url());
+  controller.start();
+  controller.set_selected_model("m");
+  controller.load_model();
+
+  bool errored = false;
+  bool finished = false;
+  std::string error;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (std::chrono::steady_clock::now() < deadline && !errored) {
+    ControllerEvent event;
+    while (controller.poll_event(event)) {
+      if (event.type == ControllerEvent::Type::Error) {
+        errored = true;
+        error = event.text;
+      }
+      if (event.type == ControllerEvent::Type::LoadFinished) finished = true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  controller.stop();
+  check(errored, "load failure is reported");
+  check(error.find("load failed") != std::string::npos,
+        "load failure message: " + error);
+  check(!finished, "load failure does not report success");
+}
+
+void test_controller_shutdown_during_approval() {
+  std::error_code ec;
+  const fs::path workspace =
+      fs::temp_directory_path(ec) /
+      ("taia_ctrl_approval_stop_" + std::to_string(::getpid()));
+  fs::remove_all(workspace, ec);
+  fs::create_directories(workspace, ec);
+  const std::string args = "{\"path\":\"never.txt\",\"content\":\"x\"}";
+  FakeServer server(chunked_response("text/event-stream",
+                                     tool_call_body("write_file", args)));
+  SessionController controller(server.base_url(), "", {},
+                               workspace.string());
+  controller.start();
+  controller.set_selected_model("mock/small");
+  controller.submit_prompt("write it");
+
+  bool requested = false;
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (std::chrono::steady_clock::now() < deadline && !requested) {
+    ControllerEvent event;
+    while (controller.poll_event(event)) {
+      if (event.type == ControllerEvent::Type::ApprovalRequest) {
+        requested = true;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  check(requested, "approval requested before shutdown");
+
+  const auto begin = std::chrono::steady_clock::now();
+  controller.stop();
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - begin);
+  check(elapsed < std::chrono::milliseconds(2000),
+        "shutdown resolves a pending approval");
+  check(!fs::exists(workspace / "never.txt", ec),
+        "shutdown did not apply the pending write");
+  fs::remove_all(workspace, ec);
+}
+
 void test_controller_shutdown_stall() {
   FakeServer server(std::vector<std::string>{std::string()});
   SessionController controller(server.base_url());
@@ -881,6 +1072,7 @@ int main() {
   test_stream_success();
   test_stream_error();
   test_stream_incomplete();
+  test_malformed_sse_event();
   test_invalid_models_json();
   test_bad_scheme();
   test_truncated_content_length();
@@ -902,6 +1094,10 @@ int main() {
   test_controller_unload_polling();
   test_controller_tool_loop();
   test_controller_approval();
+  test_controller_cancel_mid_stream();
+  test_controller_error_drops_turn();
+  test_controller_load_failure();
+  test_controller_shutdown_during_approval();
   test_controller_shutdown_stall();
   if (failures == 0) {
     std::cout << "all client tests passed\n";

@@ -1,3 +1,4 @@
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -299,6 +300,29 @@ void test_exec_command() {
         "background process killed");
 }
 
+void test_exec_command_cancel() {
+  TempWorkspace workspace;
+  const ToolRegistry registry = taia::tools::make_builtin_tools();
+  std::atomic<bool> cancel{false};
+  ToolContext context{workspace.path(), &cancel};
+  context.approve = [](const std::string&) { return true; };
+  std::thread canceller([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    cancel = true;
+  });
+  const auto begin = std::chrono::steady_clock::now();
+  const auto result = registry.execute(
+      "exec_command", "{\"command\":\"sleep 5\"}", context);
+  canceller.join();
+  const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - begin);
+  check(!result.ok, "cancelled command fails");
+  check(result.content.find("cancelled") != std::string::npos,
+        "cancel message: " + result.content);
+  check(elapsed < std::chrono::milliseconds(2000),
+        "cancelled command stops promptly");
+}
+
 void test_output_cap() {
   TempWorkspace workspace;
   const ToolRegistry registry = taia::tools::make_builtin_tools();
@@ -323,6 +347,7 @@ int main() {
   test_agents_md();
   test_write_file();
   test_exec_command();
+  test_exec_command_cancel();
   test_output_cap();
   if (failures == 0) {
     std::cout << "all tool tests passed\n";

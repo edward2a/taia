@@ -185,7 +185,7 @@ void ApprovalView::render(cpptui::Buffer& buffer) {
   if (width <= 0 || height <= 0) return;
 
   const std::string header =
-      "APPROVAL REQUIRED  [y] approve  [n] reject  (arrows scroll)";
+      "APPROVAL REQUIRED  [y] approve  [n] reject  (arrows scroll/pan)";
   draw_text(buffer, x, y, header, theme.warning, theme.panel_bg,
             std::min(width, static_cast<int>(header.size())));
   if (height < 2) return;

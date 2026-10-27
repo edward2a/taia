@@ -102,8 +102,8 @@ ChatUi::ChatUi(cpptui::App* app, ActionSink sink)
   auto shortcut_bar = std::make_shared<cpptui::Horizontal>();
   shortcut_bar->fixed_height = 1;
   shortcut_bar->add(std::make_shared<cpptui::HorizontalSpacer>(1));
-  std::vector<std::string> shortcuts = {"^L Load", "^U Unload", "^R Refresh",
-                                        "^J Newline", "^C Quit"};
+  std::vector<std::string> shortcuts = {"^L Load",   "^U Unload", "^R Refresh",
+                                        "^J Newline", "Esc Cancel", "^C Quit"};
   int shortcut_width = 0;
   for (const auto& s : shortcuts) {
     shortcut_width = std::max(shortcut_width, static_cast<int>(s.size()));
@@ -127,6 +127,7 @@ ChatUi::ChatUi(cpptui::App* app, ActionSink sink)
   app_->register_key(
       'l',
       [this] {
+        if (state_ != RunState::Idle && state_ != RunState::Error) return;
         std::string model = selected_model();
         if (!model.empty()) emit(ActionType::LoadModel, model);
       },
@@ -134,11 +135,25 @@ ChatUi::ChatUi(cpptui::App* app, ActionSink sink)
   app_->register_key(
       'u',
       [this] {
+        if (state_ != RunState::Idle && state_ != RunState::Error) return;
         std::string model = selected_model();
         if (!model.empty()) emit(ActionType::UnloadModel, model);
       },
       true);
-  app_->register_key('r', [this] { emit(ActionType::RefreshModels); }, true);
+  app_->register_key(
+      'r',
+      [this] {
+        if (state_ != RunState::Idle && state_ != RunState::Error) return;
+        emit(ActionType::RefreshModels);
+      },
+      true);
+  app_->register_key(27, [this] {
+    if (approval_view_->visible) {
+      emit(ActionType::Reject);
+    } else if (state_ == RunState::Generating || state_ == RunState::Tool) {
+      emit(ActionType::CancelStream);
+    }
+  });
 }
 
 void ChatUi::emit(ActionType type, const std::string& text) {
@@ -259,6 +274,7 @@ void ChatUi::hide_approval() {
 }
 
 void ChatUi::submit_prompt() {
+  if (state_ != RunState::Idle && state_ != RunState::Error) return;
   std::string text = prompt_input_->get_text();
   if (text.empty()) return;
   prompt_input_->set_text("");

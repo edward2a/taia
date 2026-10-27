@@ -51,6 +51,12 @@ void App::handle_action(const ui::Action& action) {
       chat_->hide_approval();
       chat_->set_state(ui::RunState::Tool);
       break;
+    case ui::ActionType::CancelStream:
+      if (controller_ && (chat_->state() == ui::RunState::Generating ||
+                          chat_->state() == ui::RunState::Tool)) {
+        controller_->cancel_stream();
+      }
+      break;
   }
 }
 

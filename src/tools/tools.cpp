@@ -667,6 +667,11 @@ class ExecCommandTool : public Tool {
     if (pid == 0) {
       ::setpgid(0, 0);
       ::close(pipe_fds[0]);
+      const int stdin_fd = ::open("/dev/null", O_RDONLY);
+      if (stdin_fd >= 0) {
+        ::dup2(stdin_fd, STDIN_FILENO);
+        if (stdin_fd != STDIN_FILENO) ::close(stdin_fd);
+      }
       ::dup2(pipe_fds[1], STDOUT_FILENO);
       ::dup2(pipe_fds[1], STDERR_FILENO);
       ::close(pipe_fds[1]);

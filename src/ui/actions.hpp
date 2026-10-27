@@ -13,6 +13,7 @@ enum class ActionType {
   RefreshModels,
   Approve,
   Reject,
+  CancelStream,
 };
 
 struct Action {

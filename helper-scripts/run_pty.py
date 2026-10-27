@@ -43,6 +43,18 @@ def main():
     out = bytearray()
 
     drain(fd, out, start_wait)
+    resize_steps = os.environ.get("PTY_RESIZE_STEPS", "")
+    for step in resize_steps.split(","):
+        if not step:
+            continue
+        spec, _, delay = step.partition(":")
+        resize_rows, _, resize_cols = spec.partition("x")
+        drain(fd, out, float(delay) if delay else 0.5)
+        fcntl.ioctl(
+            fd,
+            termios.TIOCSWINSZ,
+            struct.pack("HHHH", int(resize_rows), int(resize_cols), 0, 0),
+        )
     os.write(fd, keys)
     drain(fd, out, key_wait)
     if decision:

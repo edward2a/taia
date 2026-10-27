@@ -4,6 +4,8 @@
 
 Build a lightweight C++ coding agent using cpp-tui, with an experience comparable to OpenCode. The MVP connects to llama.cpp v0.7.0, supports model selection and lifecycle controls, streams chat, and can inspect and modify a workspace with user approval.
 
+Milestones 1-5 are implemented. Deferred work is tracked in [`TODO.md`](TODO.md).
+
 ## Decisions and Constraints
 
 - Pin llama.cpp to tag `v0.7.0`, commit `620d2225cc436ab0b001e3200e590e3b286ef9ab`.

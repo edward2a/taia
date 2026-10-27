@@ -383,6 +383,7 @@ void SessionController::do_submit_prompt(const std::string& model,
         push_event({ControllerEvent::Type::StreamDone, {}, "", true});
         return;
       }
+      drop_last_turn();
       push_event({ControllerEvent::Type::Error, {}, error, false});
       return;
     }
@@ -394,6 +395,7 @@ void SessionController::do_submit_prompt(const std::string& model,
       return;
     }
     if (result.tool_calls.size() > kMaxToolCalls) {
+      drop_last_turn();
       push_event({ControllerEvent::Type::Error, {},
                   "too many tool calls in one round", false});
       return;
@@ -451,6 +453,7 @@ void SessionController::do_submit_prompt(const std::string& model,
       return;
     }
   }
+  drop_last_turn();
   push_event(
       {ControllerEvent::Type::Error, {}, "tool round limit reached", false});
 }
