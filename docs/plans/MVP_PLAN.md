@@ -4,7 +4,7 @@
 
 Build a lightweight C++ coding agent using cpp-tui, with an experience comparable to OpenCode. The MVP connects to llama.cpp v0.7.0, supports model selection and lifecycle controls, streams chat, and can inspect and modify a workspace with user approval.
 
-Milestones 1-5 are implemented. Deferred work is tracked in [`TODO.md`](TODO.md).
+Milestones 1-5 are implemented. Milestone 6 is planned. Deferred work is tracked in [`TODO.md`](TODO.md).
 
 ## Decisions and Constraints
 
@@ -56,13 +56,77 @@ Milestones 1-5 are implemented. Deferred work is tracked in [`TODO.md`](TODO.md)
 
 5. **Harden and document.** Cover cancellation, disconnects, malformed or incomplete streamed events, server errors, model lifecycle failures, terminal resize, and application shutdown. Document setup, mock usage, the pinned server version, and the exact build/test commands after the project build system is established.
 
+6. **Add CLI configuration.** Extend the positional and environment setup with a tested argument parser while preserving existing invocations.
+
+   **Invocation:**
+
+   ```text
+   taia_ct [OPTIONS] [SERVER_URL]
+   ```
+
+   **Options:**
+
+   - `-h`, `--help`: print usage and exit successfully without starting the TUI.
+   - `-u`, `--server-url URL`: set the server base URL.
+   - `-w`, `--workspace PATH`: set the workspace root.
+   - `--stream-start-timeout-seconds N`: set the first-token timeout.
+   - `--stream-idle-timeout-seconds N`: set the inter-chunk idle timeout.
+   - `--prompt-api-key`: read an API key from hidden stdin before TUI startup.
+
+   Do not add an `--api-key VALUE` option. Keep `TAIA_API_KEY` as the
+   non-interactive source.
+
+   **Implementation:**
+
+   - Add `src/cli_options.hpp` and `src/cli_options.cpp` with a parser that
+     returns structured overrides plus help/error status. Keep parsing free of
+     filesystem, network, terminal, and TUI work. Put usage text in one place.
+   - Resolve ordinary settings with **CLI > environment > existing default**.
+     Retain the positional server URL for compatibility. Reject a positional
+     URL when `--server-url` is also supplied. Reject unknown options, missing
+     values, and extra positional arguments.
+   - Parse timeout values as whole seconds in the existing accepted range,
+     `1-86400`. Invalid CLI values report a clear error, print usage, and exit
+     nonzero before starting the TUI. Keep current environment-variable
+     fallback behavior for invalid environment values.
+   - In `src/main.cpp`, parse arguments first. On `--help`, print usage and
+     return success. On parse errors, print the error and usage to stderr and
+     return nonzero. Otherwise resolve the final settings and start the app.
+   - Implement `--prompt-api-key` in `src/main.cpp`: require
+     `isatty(STDIN_FILENO)`, disable echo with `termios`, read one line, restore
+     terminal settings on every success and error path, and print a newline
+     after input. Reject empty input or EOF with a nonzero exit. The prompted
+     key overrides `TAIA_API_KEY`. Never print or log the key.
+   - When `--prompt-api-key` is absent, preserve current `TAIA_API_KEY`
+     behavior, including no prompt and no key when unset.
+   - Update `README.md` and `AGENTS.md` with the flags, precedence, examples,
+     and the security tradeoff between the hidden prompt and environment
+     variables.
+
+   **Tests:**
+
+   - Add `tests/cpp/test_cli_options.cpp` and register a `taia_cli_test` target
+     in `CMakeLists.txt` with `src/cli_options.cpp`.
+   - Cover every flag, positional URL compatibility, CLI-over-environment
+     precedence, conflicting URL sources, unknown options, missing values, extra
+     positional arguments, timeout bounds, and help parsing.
+   - Add a PTY test that confirms the API-key prompt is not echoed, the key is
+     sent for authentication, and terminal settings are restored after success,
+     empty input, and EOF.
+
+   **Exit condition:** `make test`, the Python tests, Black, and flake8 pass.
+   `--help` and invalid invocations exit before TUI startup with the documented
+   status. Existing environment-variable and positional-URL invocations continue
+   to work, and the prompted API key authenticates without appearing on screen.
+
 ## Verification
 
 - Test Python mock routes and state transitions, including load/unload failures and delayed responses.
 - Test C++ client parsing and controller state changes against deterministic mock responses.
 - Test streamed responses, disconnects, cancellation, and server errors before connecting to the real server.
 - Run a manual end-to-end check against llama.cpp v0.7.0 and a locally available model.
-- Add tests for tool argument validation, workspace path boundaries, approval/rejection, and patch behavior when those components are introduced.
+- Test tool argument validation, workspace path boundaries, approval/rejection, and patch behavior when those components are introduced.
+- Test CLI parsing, precedence, validation, help, and the hidden API-key prompt. Verify invalid invocations exit before TUI startup.
 - Define exact build and test commands in project files; do not invent commands before those files exist.
 
 ## Out of Scope
